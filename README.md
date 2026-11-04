@@ -1,8 +1,25 @@
 # Capturo
 
+[![Demonstração do Capturo](docs/media/capturo-hero.gif)](docs/media/capturo-demo.mp4)
+
+*[Ver o vídeo completo (40 s, MP4)](docs/media/capturo-demo.mp4)*
+
 Ferramenta de print para Windows no estilo do Lightshot. Fiz porque queria algo pequeno que fizesse só isso e fizesse bem: selecionar uma área, rabiscar em cima e copiar, salvar ou fixar na tela.
 
 É um único `.exe` de uns 80 KB, sem instalação e sem dependências. Fica na bandeja do sistema.
+
+## Veja em ação
+
+| | |
+|---|---|
+| ![Captura com lupa](docs/media/01-captura-lupa.webp) | ![Anotação](docs/media/02-anotacao.webp) |
+| **Print Screen e lupa pixel a pixel** para acertar a seleção. | **Rabisque em cima**: seta, retângulo, texto, marcador e paleta de cores. |
+| ![Upload](docs/media/03-upload-nuvem.webp) | ![Fixar na tela](docs/media/04-fixar-na-tela.webp) |
+| **Envio pra nuvem** com o link já copiado. | **Fixe a imagem na tela**, com zoom e opacidade. |
+| ![Bandeja](docs/media/05-bandeja.webp) | ![Configurações](docs/media/06-configuracoes.webp) |
+| **Menu da bandeja** com todas as ações. | **Configurações**: atalhos, pasta, formato e tamanho dos ícones. |
+
+*O vídeo e as imagens são uma recriação da interface feita a partir do código, não gravações de tela do app rodando. Fonte, notificações do Windows e o conteúdo capturado são aproximados.*
 
 ## Stack
 
