@@ -1,6 +1,12 @@
 # Capturo
 
-Ferramenta de captura de tela para Windows no estilo do Lightshot. É um único `.exe` (~80 KB), sem instalação e sem dependências.
+Ferramenta de print para Windows no estilo do Lightshot. Fiz porque queria algo pequeno que fizesse só isso e fizesse bem: selecionar uma área, rabiscar em cima e copiar, salvar ou fixar na tela.
+
+É um único `.exe` de uns 80 KB, sem instalação e sem dependências. Fica na bandeja do sistema.
+
+## Stack
+
+C# com WinForms, num arquivo só (`src/Program.cs`). Compila com o `csc.exe` do .NET Framework 4.x que já vem no Windows, então não precisa instalar Visual Studio nem SDK.
 
 ## Uso
 Rode `dist\Capturo.exe`. Ele fica na bandeja do sistema.
