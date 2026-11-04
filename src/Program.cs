@@ -146,9 +146,12 @@ namespace Capturo
         public bool OpenAfterUpload = true;
         public int ColorArgb = Color.FromArgb(255, 235, 30, 50).ToArgb();
         public int Thickness = 3;
+        public int IconScale = 100;                                  // % do tamanho das barras de ferramentas
         public Hotkey CaptureKey = new Hotkey(0, 0x2C);              // Print Screen
         public Hotkey FullKey = new Hotkey(Hotkey.Shift, 0x2C);      // Shift + Print Screen
         public Hotkey PinKey = new Hotkey(Hotkey.Ctrl, 0x2C);        // Ctrl + Print Screen
+
+        public const int MinIcon = 60, MaxIcon = 160;
 
         public static readonly string Dir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Capturo");
@@ -176,6 +179,7 @@ namespace Capturo
                             case "OpenAfterUpload": s.OpenAfterUpload = v == "1"; break;
                             case "Color": int c; if (int.TryParse(v, out c)) s.ColorArgb = c; break;
                             case "Thickness": int t; if (int.TryParse(v, out t)) s.Thickness = Math.Max(1, Math.Min(20, t)); break;
+                            case "IconScale": int z; if (int.TryParse(v, out z)) s.IconScale = Math.Max(MinIcon, Math.Min(MaxIcon, z)); break;
                             case "CaptureKey": s.CaptureKey = Hotkey.Parse(v, s.CaptureKey); break;
                             case "FullKey": s.FullKey = Hotkey.Parse(v, s.FullKey); break;
                             case "PinKey": s.PinKey = Hotkey.Parse(v, s.PinKey); break;
@@ -199,6 +203,7 @@ namespace Capturo
                 sb.AppendLine("OpenAfterUpload=" + (OpenAfterUpload ? "1" : "0"));
                 sb.AppendLine("Color=" + ColorArgb);
                 sb.AppendLine("Thickness=" + Thickness);
+                sb.AppendLine("IconScale=" + IconScale);
                 sb.AppendLine("CaptureKey=" + CaptureKey.Serialize());
                 sb.AppendLine("FullKey=" + FullKey.Serialize());
                 sb.AppendLine("PinKey=" + PinKey.Serialize());
@@ -464,10 +469,10 @@ namespace Capturo
         // Ícones dos botões, desenhados vetorialmente.
         public static void Glyph(Graphics g, int id, Rectangle r, Color fg, Color current)
         {
-            float s = r.Width / 30f;
+            float s = r.Width / 38f;
             float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
             Func<float, float, PointF> P = (x, y) => new PointF(cx + x * s, cy + y * s);
-            using (var pen = new Pen(fg, 1.6f * s))
+            using (var pen = new Pen(fg, 1.8f * s))
             using (var br = new SolidBrush(fg))
             {
                 pen.StartCap = pen.EndCap = LineCap.Round; pen.LineJoin = LineJoin.Round;
@@ -478,7 +483,7 @@ namespace Capturo
                         g.DrawLine(pen, P(2, -5), P(5, -2));
                         break;
                     case 2: g.DrawLine(pen, P(-7, 7), P(7, -7)); break; // linha
-                    case 3: DrawArrow(g, fg, 1.6f * s, P(-7, 7), P(7, -7)); break; // seta
+                    case 3: DrawArrow(g, fg, 1.8f * s, P(-7, 7), P(7, -7)); break; // seta
                     case 4: // retângulo
                         using (var rp = RoundRect(new RectangleF(cx - 8 * s, cy - 6 * s, 16 * s, 12 * s), 1.5f * s)) g.DrawPath(pen, rp);
                         break;
@@ -756,7 +761,8 @@ namespace Capturo
             btns.Clear();
             paletteOpen = paletteOpen && hasSel;
             if (!hasSel) return;
-            int b = S(34), pad = S(5), gap = S(8), sep = S(9);
+            float f = TrayApp.S.IconScale / 100f;
+            int b = S(34 * f), pad = S(5 * f), gap = S(8), sep = S(9 * f);
             int W = ClientSize.Width, H = ClientSize.Height;
 
             int vlen = 0; foreach (int id in ToolIds) vlen += id < 0 ? sep : b;
@@ -1802,11 +1808,51 @@ namespace Capturo
         }
     }
 
+    // Prévia das barras da captura no tamanho escolhido nas configurações.
+    class IconPreview : Control
+    {
+        public int Percent = 100;
+        public float Dpi = 1f;
+        static readonly int[] Ids = { 1, 3, 4, 6, -1, 7, 24, 25 };
+
+        public IconPreview()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(Color.FromArgb(58, 60, 66));
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            float f = Percent / 100f * Dpi;
+            int b = (int)Math.Round(34 * f), pad = (int)Math.Round(5 * f), sep = (int)Math.Round(9 * f);
+            int len = 0; foreach (int id in Ids) len += id < 0 ? sep : b;
+            var bar = new Rectangle((Width - len - pad * 2) / 2, (Height - b - pad * 2) / 2, len + pad * 2, b + pad * 2);
+            Art.Shadow(g, bar, 9 * Dpi, Dpi);
+            Art.FillRound(g, Color.White, bar, 9 * Dpi);
+            int x = bar.X + pad;
+            var col = Color.FromArgb(TrayApp.S.ColorArgb);
+            foreach (int id in Ids)
+            {
+                if (id < 0)
+                {
+                    using (var sp = new Pen(Color.FromArgb(225, 225, 232), 1))
+                        g.DrawLine(sp, x + sep / 2, bar.Y + pad + 7 * Dpi, x + sep / 2, bar.Y + pad + b - 7 * Dpi);
+                    x += sep; continue;
+                }
+                Art.Glyph(g, id, new Rectangle(x, bar.Y + pad, b, b), Art.Ink, col);
+                x += b;
+            }
+        }
+    }
+
     class SettingsForm : Form
     {
         readonly TextBox folder;
         readonly ComboBox format;
         readonly CheckBox quick, openAfter, startup;
+        readonly TrackBar iconSize;
         readonly HotkeyBox hkCapture, hkFull, hkPin;
         readonly Label problem;
         readonly float k;
@@ -1823,7 +1869,7 @@ namespace Capturo
             StartPosition = FormStartPosition.CenterScreen;
             AutoScaleMode = AutoScaleMode.None;
             Font = new Font("Segoe UI", 12f * k, FontStyle.Regular, GraphicsUnit.Pixel);
-            ClientSize = new Size(D(500), D(486));
+            ClientSize = new Size(D(500), D(610));
             Icon = Art.AppIcon();
             TopMost = true;
             var S = TrayApp.S;
@@ -1859,14 +1905,29 @@ namespace Capturo
             gs.Controls.Add(quick);
 
             // --- Geral
-            var gg = new GroupBox { Text = "Geral", Location = P(12, 332), Size = new Size(D(476), D(96)) };
+            var gg = new GroupBox { Text = "Geral", Location = P(12, 332), Size = new Size(D(476), D(220)) };
             Controls.Add(gg);
             openAfter = new CheckBox { Text = "Abrir o link no navegador após enviar para a nuvem", Checked = S.OpenAfterUpload, Location = P(16, 28), AutoSize = true };
             startup = new CheckBox { Text = "Iniciar com o Windows", Checked = Settings.StartWithWindows, Location = P(16, 58), AutoSize = true };
             gg.Controls.Add(openAfter); gg.Controls.Add(startup);
 
-            var ok = new Button { Text = "Salvar", Location = P(310, 442), Size = new Size(D(86), D(30)) };
-            var cancel = new Button { Text = "Cancelar", Location = P(402, 442), Size = new Size(D(86), D(30)), DialogResult = DialogResult.Cancel };
+            gg.Controls.Add(new Label { Text = "Tamanho dos ícones:", Location = P(14, 98), AutoSize = true });
+            iconSize = new TrackBar
+            {
+                Minimum = Settings.MinIcon / 10, Maximum = Settings.MaxIcon / 10, SmallChange = 1, LargeChange = 2,
+                TickFrequency = 1, Value = S.IconScale / 10, Location = P(150, 90), Size = new Size(D(210), D(34)), AutoSize = false
+            };
+            var iconPct = new Label { Location = P(364, 98), Size = new Size(D(46), D(20)), TextAlign = ContentAlignment.TopRight };
+            var iconReset = new Button { Text = "100%", Location = P(414, 94), Size = new Size(D(50), D(26)), Font = new Font(Font.FontFamily, 10.5f * k, GraphicsUnit.Pixel) };
+            var preview = new IconPreview { Location = P(14, 132), Size = new Size(D(448), D(76)), Dpi = k };
+            EventHandler sync = (s, e) => { iconPct.Text = iconSize.Value * 10 + "%"; preview.Percent = iconSize.Value * 10; preview.Invalidate(); };
+            iconSize.ValueChanged += sync;
+            iconReset.Click += (s, e) => iconSize.Value = 10;
+            sync(null, null);
+            gg.Controls.Add(iconSize); gg.Controls.Add(iconPct); gg.Controls.Add(iconReset); gg.Controls.Add(preview);
+
+            var ok = new Button { Text = "Salvar", Location = P(310, 566), Size = new Size(D(86), D(30)) };
+            var cancel = new Button { Text = "Cancelar", Location = P(402, 566), Size = new Size(D(86), D(30)), DialogResult = DialogResult.Cancel };
             Controls.Add(ok); Controls.Add(cancel);
             CancelButton = cancel;
             ok.Click += (s, e) =>
@@ -1880,6 +1941,7 @@ namespace Capturo
                 S.Format = (string)format.SelectedItem;
                 S.QuickSave = quick.Checked;
                 S.OpenAfterUpload = openAfter.Checked;
+                S.IconScale = iconSize.Value * 10;
                 try { Settings.StartWithWindows = startup.Checked; } catch { }
                 S.Save();
                 DialogResult = DialogResult.OK;

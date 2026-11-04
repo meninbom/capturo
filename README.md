@@ -56,6 +56,8 @@ A captura vira uma janela flutuante, **sempre visível por cima** das outras.
 O envio usa o **catbox.moe** (anônimo, sem conta). A imagem fica **pública** para quem tiver o link. Os últimos links ficam em *bandeja → Envios recentes*.
 
 ## Configurações
+Em *bandeja → Configurações → Geral*, o controle **Tamanho dos ícones** aumenta ou diminui as barras de ferramentas da captura (60% a 160%), com prévia ao vivo.
+
 Os arquivos ficam em `%APPDATA%\Capturo`.
 
 ## Compilar
