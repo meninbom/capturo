@@ -1,7 +1,7 @@
 ﻿// Projeto de vídeo: estilo, trechos de zoom, câmera, cursor e a montagem de cada quadro.
 // A câmera e o cursor seguem as ideias do Recordly (zoom que "mergulha" no ponto com curva
-// de saída rápida, câmera que só anda quando o cursor sai de uma zona segura, molas que
-// suavizam tudo, zooms próximos encadeados com um deslize), escritas aqui do zero.
+// de saída rápida, câmera que só anda quando o cursor sai de uma zona segura, cursor suavizado
+// sem atraso, zooms próximos encadeados com um deslize), escritas aqui do zero.
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -22,7 +22,9 @@ namespace Capturo
         // zoom
         public bool Zoom = true;            // aplicar os trechos de zoom
         public float Depth = 1.8f;          // profundidade dos zooms novos
-        public int Speed = 1;               // 0 = rápida, 1 = suave
+        public int Speed = 1;               // (antigo: 0 = rápida, 1 = suave; virou ZoomTime)
+        public float ZoomTime = 1.5f;       // duração da entrada do zoom, em segundos (0,4 rápida .. 4 bem lenta)
+        public float ZoomHold = 0.5f;       // quanto o zoom fica no foco depois do último clique (s)
         public bool Follow = true;          // câmera acompanha o cursor dentro do zoom
         public bool Connect = true;         // zooms próximos deslizam de um ponto ao outro
         public float ZoomBlur = 0.35f;      // desfoque de movimento da câmera (0..1)
@@ -36,10 +38,17 @@ namespace Capturo
         public bool CamMirror = true;
         public float CamShadow = 0.6f;
         public bool CamShrink = true;       // fica menor durante o zoom
+        public int CamBg = 0;               // fundo: 0 normal, 1 desfocado, 2 uma cor, 3 sem fundo (pessoa recortada)
+        public float CamBlur = 0.6f;        // intensidade do desfoque do fundo
+        public int CamBgColor = unchecked((int)0xFF1E293B);
+        public int CamFilter = 0;           // 0 nenhum, 1 vívido, 2 P&B, 3 sépia, 4 quente, 5 frio
+        public float CamBright = 0;         // -0,5..0,5
+        public float CamBorder = 0;         // contorno: 0 (só um fio) .. 1 (grosso)
+        public int CamBorderColor = unchecked((int)0xFFFFFFFF);
         // cursor
         public bool Cursor = true;
         public float CursorSize = 2f;       // 1..4 (× o tamanho do sistema)
-        public float Smoothing = 0.67f;     // 0..2 (mola)
+        public float Smoothing = 0.67f;     // 0..2 (quanto o cursor é suavizado)
         public float Sway = 0.4f;           // 0..1 inclinação conforme a velocidade
         public float Bounce = 1f;           // 0..2 quique no clique
         public float CursorBlur = 0.5f;     // 0..1 rastro do cursor
@@ -98,6 +107,8 @@ namespace Capturo
                 }
                 catch { }
             }
+            // estilos salvos antes da duração ajustável: "Rápida" era 0,6 s
+            if (text.IndexOf("ZoomTime=", StringComparison.Ordinal) < 0 && st.Speed == 0) st.ZoomTime = 0.6f;
             st.Clamp();
             return st;
         }
@@ -116,9 +127,12 @@ namespace Capturo
             OutFps = OutFps >= 60 ? 60 : 30; Quality = Math.Max(0, Math.Min(2, Quality));
             GifFps = Math.Max(5, Math.Min(30, GifFps)); GifWidth = Math.Max(240, Math.Min(1920, GifWidth));
             ClickFx = Math.Max(0, Math.Min(2, ClickFx)); Speed = Speed == 0 ? 0 : 1;
+            ZoomTime = Math.Max(0.4f, Math.Min(4f, ZoomTime)); ZoomHold = Math.Max(0.3f, Math.Min(8f, ZoomHold));
             CamSize = Math.Max(0.12f, Math.Min(0.45f, CamSize)); CamPos = Math.Max(0, Math.Min(4, CamPos));
             CamX = Math.Max(0, Math.Min(1, CamX)); CamY = Math.Max(0, Math.Min(1, CamY));
             CamRound = Math.Max(0, Math.Min(1, CamRound)); CamShadow = Math.Max(0, Math.Min(1, CamShadow));
+            CamBg = Math.Max(0, Math.Min(3, CamBg)); CamBlur = Math.Max(0, Math.Min(1, CamBlur)); CamFilter = Math.Max(0, Math.Min(5, CamFilter));
+            CamBright = Math.Max(-0.5f, Math.Min(0.5f, CamBright)); CamBorder = Math.Max(0, Math.Min(1, CamBorder));
         }
 
         public VideoStyle Clone() { return (VideoStyle)MemberwiseClone(); }
@@ -132,6 +146,7 @@ namespace Capturo
         public bool Manual;         // foco fixo (não segue o cursor)
         public bool Auto;           // criado a partir dos cliques
         public bool Motion;         // sugerido pelo movimento do cursor (parou depois de andar)
+        public float Fit;           // automáticos: profundidade máxima para os cliques do trecho caberem (0 = sem limite)
         public ZoomRegion Clone() { return (ZoomRegion)MemberwiseClone(); }
     }
 
@@ -225,6 +240,23 @@ namespace Capturo
             }
         }
 
+        // Papel de parede cobrindo dest (cortando o que sobra); usado também pela moldura dos prints.
+        public static void DrawWallpaperCover(Graphics g, int i, Rectangle dest)
+        {
+            var img = Wallpaper(i);
+            if (img == null) return;
+            lock (wallLock)
+            {
+                float k = Math.Max(dest.Width / (float)img.Width, dest.Height / (float)img.Height);
+                float w = img.Width * k, h = img.Height * k;
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                var st = g.Save();
+                g.SetClip(dest);
+                g.DrawImage(img, new RectangleF(dest.X + (dest.Width - w) / 2, dest.Y + (dest.Height - h) / 2, w, h));
+                g.Restore(st);
+            }
+        }
+
         public static Bitmap WallpaperThumb(int i, int size)
         {
             lock (wallLock)
@@ -315,21 +347,40 @@ namespace Capturo
         public void BuildAutoZooms()
         {
             Zooms.RemoveAll(z => z.Auto);
-            int clusterStart = -1, clusterEnd = -1; float fx = 0, fy = 0;
+            int clusterStart = -1, clusterEnd = -1;
+            float x0 = 0, y0 = 0, x1 = 0, y1 = 0;   // retângulo que contém os cliques do grupo
             var found = new List<ZoomRegion>();
             Action flush = () =>
             {
                 if (clusterStart < 0) return;
-                found.Add(new ZoomRegion { Start = Math.Max(0, clusterStart - 500), End = Math.Min(Duration, clusterEnd + 500), Depth = Style.Depth, X = fx, Y = fy, Auto = true });
+                // foco no meio dos cliques; se eles estão espalhados, o zoom é menor para todos caberem
+                // (os cliques ocupam no máximo 60% da área visível)
+                float bw = x1 - x0, bh = y1 - y0, fit = 0;
+                if (bw > 1 || bh > 1)
+                    fit = Math.Max(1.25f, Math.Min(bw > 1 ? W * 0.6f / bw : 99, bh > 1 ? H * 0.6f / bh : 99));
+                float depth = fit > 0 ? Math.Min(Style.Depth, fit) : Style.Depth;
+                // dura o bastante para o zoom chegar ao foco (~45% da animação) e ficar lá o tempo de foco
+                int start = Math.Max(0, clusterStart - (int)LeadMs);
+                int end = Math.Max(clusterEnd, start + (int)(InMs * 0.45)) + (int)(Style.ZoomHold * 1000);
+                found.Add(new ZoomRegion { Start = start, End = Math.Min(Duration, end), Depth = depth, Fit = fit, X = (x0 + x1) / 2, Y = (y0 + y1) / 2, Auto = true });
             };
             foreach (var c in Clicks.OrderBy(c => c.T))
             {
                 if (!InFrame(c.X, c.Y)) continue;
-                if (clusterStart >= 0 && c.T - clusterEnd <= 2500) { clusterEnd = c.T; continue; }
+                if (clusterStart >= 0 && c.T - clusterEnd <= 2500)
+                {
+                    clusterEnd = c.T;
+                    x0 = Math.Min(x0, c.X); y0 = Math.Min(y0, c.Y); x1 = Math.Max(x1, c.X); y1 = Math.Max(y1, c.Y);
+                    continue;
+                }
                 flush();
-                clusterStart = clusterEnd = c.T; fx = c.X; fy = c.Y;
+                clusterStart = clusterEnd = c.T; x0 = x1 = c.X; y0 = y1 = c.Y;
             }
             flush();
+            // com um tempo de foco longo, um trecho pode alcançar o próximo: ele termina onde o outro
+            // começa e a câmera desliza de um foco ao outro (em vez de o segundo sumir)
+            for (int i = 0; i + 1 < found.Count; i++)
+                if (found[i].End >= found[i + 1].Start) found[i].End = Math.Max(found[i].Start + 1, found[i + 1].Start - 1);
             // não sobrepõe trechos feitos à mão
             foreach (var z in found)
                 if (!Zooms.Any(m => z.End > m.Start && z.Start < m.End)) Zooms.Add(z);
@@ -383,8 +434,8 @@ namespace Capturo
                 // precisa de alguma atividade ali: o cursor imóvel é só o mouse tirado do caminho
                 if (dwell >= 1300 && cnt > 0 && moved >= small * 0.03f)
                 {
-                    int start = Math.Max(0, i0 * step - 350);
-                    int end = Math.Min(Duration, Math.Min(j * step, i0 * step + 7000) + 300);
+                    int start = Math.Max(0, i0 * step - (int)LeadMs + 150);
+                    int end = Math.Min(Duration, Math.Min(j * step, i0 * step + 7000) + Math.Max(300, (int)(Style.ZoomHold * 1000) - 200));
                     res.Add(new ZoomRegion { Start = start, End = end, Depth = Style.Depth, X = (float)(sx / cnt), Y = (float)(sy / cnt), Auto = true, Motion = true });
                     i0 = j + look;   // espera andar de novo
                     continue;
@@ -479,7 +530,10 @@ namespace Capturo
             return new PointF(a.X + (b.X - a.X) * f, a.Y + (b.Y - a.Y) * f);
         }
 
-        // ---- trilha do cursor: mola (como no Recordly, a suavidade vai de 0 a 2) e inclinação
+        // ---- trilha do cursor: suavização sem atraso e inclinação
+        // O vídeo já está gravado, então dá para olhar o movimento para frente e para trás: a média
+        // gaussiana tira os tremidos e arredonda as curvas sem deixar o cursor "atrasado" (a mola
+        // de antes chegava depois do clique). Nos cliques ele fica exatamente onde clicou.
         const double CStep = 4;
         float[] cursorTrack;   // x, y, rotação (graus), velocidade (px/s)
 
@@ -487,31 +541,56 @@ namespace Capturo
         {
             int n = (int)(Duration / CStep) + 2;
             var tr = new float[n * 4];
-            double sm = Style.Smoothing, k, c, m;
-            if (sm <= 0.5)
-            {
-                double q = sm / 0.5;
-                k = (760 - q * 420) * 1.12; c = 34 + q * 24; m = 0.85 + q * 0.55;
-            }
-            else
-            {
-                double q = (sm - 0.5) / 1.5;
-                k = (340 - q * 180) * 1.12; c = 58 + q * 22; m = 1.35 + q * 0.45;
-            }
+            var rx = new float[n]; var ry = new float[n];
             int sh;
-            var p0 = MouseAt(0, out sh);
-            double x = p0.X, y = p0.Y, vx = 0, vy = 0, rot = 0, lx = x, ly = y;
-            const int sub = 4; double dt = CStep / 1000.0 / sub;
+            for (int i = 0; i < n; i++) { var m = MouseAt(i * CStep, out sh); rx[i] = m.X; ry[i] = m.Y; }
+            float[] sx = rx, sy = ry;
+            double sm = Style.Smoothing;
+            if (sm > 0.001)
+            {
+                double sigma = 16 + sm * 52;                   // ms: 0,67 → ~50 ms; 2 → ~120 ms
+                int R = (int)Math.Ceiling(sigma * 3 / CStep);
+                var wk = new float[R + 1];
+                for (int j = 0; j <= R; j++) { double d = j * CStep / sigma; wk[j] = (float)Math.Exp(-0.5 * d * d); }
+                // um salto grande (o cursor foi parar em outro monitor ou a janela andou) não é suavizado
+                var seg = new int[n];
+                float jump = Math.Max(W, H) * 0.25f;
+                for (int i = 1; i < n; i++)
+                    seg[i] = seg[i - 1] + (Math.Abs(rx[i] - rx[i - 1]) + Math.Abs(ry[i] - ry[i - 1]) > jump ? 1 : 0);
+                var ox = new float[n]; var oy = new float[n];
+                System.Threading.Tasks.Parallel.For(0, n, i =>
+                {
+                    double ax = rx[i] * wk[0], ay = ry[i] * wk[0], aw = wk[0];
+                    int sg = seg[i];
+                    for (int j = 1; j <= R; j++)
+                    {
+                        int a = i - j, b = i + j;
+                        if (a >= 0 && seg[a] == sg) { ax += rx[a] * wk[j]; ay += ry[a] * wk[j]; aw += wk[j]; }
+                        if (b < n && seg[b] == sg) { ax += rx[b] * wk[j]; ay += ry[b] * wk[j]; aw += wk[j]; }
+                    }
+                    ox[i] = (float)(ax / aw); oy[i] = (float)(ay / aw);
+                });
+                // perto de cada clique, volta para a posição real (no instante do clique, 100%)
+                double ps = sigma * 0.9;
+                int PR = (int)Math.Ceiling(ps * 2.5 / CStep);
+                foreach (var c in Clicks)
+                {
+                    int ci = (int)Math.Round(c.T / CStep);
+                    for (int j = -PR; j <= PR; j++)
+                    {
+                        int i = ci + j;
+                        if (i < 0 || i >= n) continue;
+                        double d = j * CStep / ps;
+                        float w = (float)Math.Exp(-0.5 * d * d);
+                        ox[i] += (rx[i] - ox[i]) * w; oy[i] += (ry[i] - oy[i]) * w;
+                    }
+                }
+                sx = ox; sy = oy;
+            }
+            double rot = 0, lx = sx[0], ly = sy[0];
             for (int i = 0; i < n; i++)
             {
-                var tg = MouseAt(i * CStep, out sh);
-                if (sm <= 0.001 || Math.Abs(tg.X - x) > W * 0.6 || Math.Abs(tg.Y - y) > H * 0.6) { x = tg.X; y = tg.Y; vx = vy = 0; }
-                else
-                    for (int s = 0; s < sub; s++)
-                    {
-                        double ax = (k * (tg.X - x) - c * vx) / m, ay = (k * (tg.Y - y) - c * vy) / m;
-                        vx += ax * dt; vy += ay * dt; x += vx * dt; y += vy * dt;
-                    }
+                double x = sx[i], y = sy[i];
                 double dx = x - lx, dy = y - ly;
                 double speed = Math.Sqrt(dx * dx + dy * dy) / (CStep / 1000.0);
                 lx = x; ly = y;
@@ -565,9 +644,12 @@ namespace Capturo
         static double EaseZoom(double t) { return Bezier(0.16, 1, 0.3, 1, t); }      // sai rápido, assenta devagar
         static double Glide(double t) { t = Math.Max(0, Math.Min(1, t)); return t < 0.5 ? 4 * t * t * t : 1 - Math.Pow(-2 * t + 2, 3) / 2; }
 
-        double InMs { get { return Style.Speed == 0 ? 600 : 1500; } }
-        double OutMs { get { return Style.Speed == 0 ? 450 : 1000; } }
-        double PanMs { get { return Style.Speed == 0 ? 650 : 1000; } }
+        // duração da entrada (a saída e o deslize entre zooms acompanham, um pouco mais curtos)
+        double InMs { get { return Style.ZoomTime * 1000.0; } }
+        double OutMs { get { return InMs * 0.67; } }
+        double PanMs { get { return Math.Max(500, InMs * 0.67); } }
+        // antecedência: o zoom começa um pouco antes do clique (mais cedo quando a animação é lenta)
+        double LeadMs { get { return 300 + InMs * 0.15; } }
 
         PointF ClampFocus(float x, float y, float depth)
         {
@@ -592,7 +674,8 @@ namespace Capturo
             }
             double inMs = InMs, outMs = OutMs, panMs = PanMs;
             // mola da câmera (≈ amortecimento crítico); a rápida é mais firme
-            double k = Style.Speed == 0 ? 260 : 100, c = Style.Speed == 0 ? 33 : 21;
+            // mais lenta = mola mais macia (amortecimento quase crítico, sem balançar)
+            double k = 100 * Math.Pow(1.5 / Style.ZoomTime, 1.6), c = 2.1 * Math.Sqrt(k);
             double s = 1, tx = 0, ty = 0, vs = 0, vtx = 0, vty = 0;
             // seguir o cursor
             ZoomRegion followFor = null; float cfx = 0, cfy = 0;
@@ -608,9 +691,11 @@ namespace Capturo
                 {
                     var ch = chains[ci];
                     double st = ch[0].Start, en = ch.Last().End;
-                    double inEnd = st + inMs, outStart = en;
-                    if (inEnd > outStart) { double mid = (st + en) / 2; inEnd = Math.Max(mid, st + 1); outStart = mid; }
-                    prog = t < inEnd ? EaseZoom((t - st) / (inEnd - st)) : t <= outStart ? 1 : 1 - EaseZoom((t - outStart) / outMs);
+                    // a animação sempre tem a duração escolhida: num trecho curto ela só não chega ao fim
+                    // (antes era comprimida e ficava rápida de novo)
+                    double outStart = en;
+                    double peak = EaseZoom(Math.Min(1, (en - st) / inMs));
+                    prog = t <= outStart ? EaseZoom(Math.Min(1, (t - st) / inMs)) : peak * (1 - EaseZoom((t - outStart) / outMs));
                     bool zoomingOut = t > outStart;
                     // qual trecho está valendo: o último que começou; terminado um, já vale o próximo
                     int idx = 0;
@@ -633,12 +718,15 @@ namespace Capturo
                     // foco do trecho atual (seguindo o cursor, se for o caso)
                     if (Style.Follow && !r.Manual && !zoomingOut && !panning && t >= r.Start + 450)
                     {
-                        int sh;
-                        var cur = MouseAt(t, out sh);
+                        // usa o cursor já suavizado e só "empurra" a câmera o quanto ele passou da margem
+                        // segura (antes ela pulava para centralizar o cursor, um tranco a cada saída)
+                        float cx, cy, crot, csp;
+                        CursorAt(t, out cx, out cy, out crot, out csp);
                         float hw = W / (2 * r.Depth), hh = H / (2 * r.Depth);
-                        float inX = hw * 2 * 0.25f, inY = hh * 2 * 0.25f;
-                        if (cur.X < cfx - hw + inX || cur.X > cfx + hw - inX) cfx = cur.X;
-                        if (cur.Y < cfy - hh + inY || cur.Y > cfy + hh - inY) cfy = cur.Y;
+                        float inX = hw * 2 * 0.22f, inY = hh * 2 * 0.22f;
+                        float left = cfx - hw + inX, right = cfx + hw - inX, top = cfy - hh + inY, bottom = cfy + hh - inY;
+                        if (cx < left) cfx -= left - cx; else if (cx > right) cfx += cx - right;
+                        if (cy < top) cfy -= top - cy; else if (cy > bottom) cfy += cy - bottom;
                         var cl = ClampFocus(cfx, cfy, r.Depth);
                         cfx = cl.X; cfy = cl.Y;
                     }
@@ -752,6 +840,8 @@ namespace Capturo
         Bitmap[] corners; Rectangle[] cornerRects;
         Bitmap bgDev, scaled;
         Scaler scaler = new Scaler();
+        // exportação: zoom ampliado com bicúbico (mais nítido; a prévia fica no bilinear, mais leve)
+        public bool SharpZoom { get { return scaler.Sharp; } set { scaler.Sharp = value; } }
         readonly Dictionary<int, Bitmap> shadows = new Dictionary<int, Bitmap>();
 
         string BgKey(Size s)
@@ -933,8 +1023,7 @@ namespace Capturo
             var view = View(t);
             float zoom = W / view.Width;
             var dst = ContentRect(outSize);
-            float sx = frame.Width / (float)W, sy = frame.Height / (float)H;
-            var src = new RectangleF(view.X * sx, view.Y * sy, view.Width * sx, view.Height * sy);
+            var src = SourceRect(frame, view);
 
             var tm = g.Transform;
             float ts = tm.Elements[0], tx = tm.Elements[4], ty = tm.Elements[5];
@@ -944,33 +1033,11 @@ namespace Capturo
             g.CompositingMode = CompositingMode.SourceCopy;
             if (HasFrame)
             {
-                var bg = BackgroundLayer(outSize);
-                var devSize = new Size((int)Math.Round(outSize.Width * ts), (int)Math.Round(outSize.Height * ts));
-                if (devSize == outSize) g.DrawImageUnscaled(bg, (int)tx, (int)ty);
-                else
-                {
-                    if (bgDev == null || bgDev.Size != devSize)
-                    {
-                        if (bgDev != null) bgDev.Dispose();
-                        bgDev = new Bitmap(devSize.Width, devSize.Height, PixelFormat.Format32bppRgb);
-                        using (var gb = Graphics.FromImage(bgDev))
-                        {
-                            gb.InterpolationMode = InterpolationMode.HighQualityBilinear;
-                            gb.DrawImage(bg, new Rectangle(0, 0, devSize.Width, devSize.Height));
-                        }
-                    }
-                    g.DrawImageUnscaled(bgDev, (int)tx, (int)ty);
-                }
+                var bg = DeviceBackground(outSize, ts);
+                g.DrawImageUnscaled(bg, (int)tx, (int)ty);
             }
             var dev = Rectangle.Round(new RectangleF(dst.X * ts + tx, dst.Y * ts + ty, dst.Width * ts, dst.Height * ts));
-            // desfoque de movimento da câmera: mistura um pouco do quadro anterior quando ela anda rápido
-            float blend = 0;
-            if (motion && Style.ZoomBlur > 0)
-            {
-                double v = CameraSpeed(t, 1000.0 / 30) * ts;
-                blend = (float)Math.Min(0.5, v / 60.0 * Style.ZoomBlur);
-                if (blend < 0.03f) blend = 0;
-            }
+            float blend = MotionBlend(t, ts, motion);
             if (blend == 0 && dev.Width == frame.Width && dev.Height == frame.Height && Math.Abs(src.Width - frame.Width) < 0.01f && Math.Abs(src.Height - frame.Height) < 0.01f)
             {
                 g.DrawImageUnscaled(frame, dev.X, dev.Y);   // sem zoom e no tamanho original
@@ -983,10 +1050,95 @@ namespace Capturo
                     if (scaled != null) scaled.Dispose();
                     scaled = new Bitmap(dev.Width, dev.Height, PixelFormat.Format32bppRgb);
                 }
-                scaler.Bilinear(frame, src, scaled, motion ? blend : 0);
+                scaler.Bilinear(frame, src, scaled, blend);
                 g.DrawImageUnscaled(scaled, dev.X, dev.Y);
             }
             g.Restore(saved);
+            DrawOverlays(g, t, view, dst, outSize, zoom);
+        }
+
+        // Exportação: o fundo e o quadro (com o zoom) vão direto para a memória do bitmap de saída
+        // (as cópias do GDI+ custavam ~20 ms por quadro 1080p); só cursor, cliques, cantos e câmera
+        // passam pelo GDI+. scale: tamanho do bitmap / OutputSize.
+        public unsafe void RenderInto(Bitmap target, float scale, Bitmap frame, double t, bool motion)
+        {
+            var outSize = OutputSize;
+            var view = View(t);
+            float zoom = W / view.Width;
+            var dst = ContentRect(outSize);
+            var src = SourceRect(frame, view);
+            var bounds = new Rectangle(0, 0, target.Width, target.Height);
+            var dev = Rectangle.Round(new RectangleF(dst.X * scale, dst.Y * scale, dst.Width * scale, dst.Height * scale));
+            dev.Intersect(bounds);
+            float blend = MotionBlend(t, scale, motion);
+            var td = target.LockBits(bounds, ImageLockMode.ReadWrite, PixelFormat.Format32bppRgb);
+            try
+            {
+                if (HasFrame)
+                {
+                    var bg = DeviceBackground(outSize, scale);
+                    int w = Math.Min(bg.Width, target.Width), h = Math.Min(bg.Height, target.Height);
+                    var bd = bg.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
+                    try
+                    {
+                        byte* s0 = (byte*)bd.Scan0, d0 = (byte*)td.Scan0;
+                        int ss = bd.Stride, ds = td.Stride;
+                        System.Threading.Tasks.Parallel.For(0, h, y =>
+                            MF.Copy((IntPtr)(d0 + (long)y * ds), (IntPtr)(s0 + (long)y * ss), (IntPtr)(w * 4)));
+                    }
+                    finally { bg.UnlockBits(bd); }
+                }
+                if (dev.Width > 0 && dev.Height > 0)
+                    scaler.ScaleInto(frame, src, td, dev, blend);
+            }
+            finally { target.UnlockBits(td); }
+            using (var g = Graphics.FromImage(target))
+            {
+                g.CompositingQuality = CompositingQuality.HighSpeed;
+                g.InterpolationMode = InterpolationMode.Bilinear;
+                g.PixelOffsetMode = PixelOffsetMode.Half;
+                if (scale < 0.999f || scale > 1.001f) g.ScaleTransform(scale, scale);
+                DrawOverlays(g, t, view, dst, outSize, zoom);
+            }
+        }
+
+        RectangleF SourceRect(Bitmap frame, RectangleF view)
+        {
+            float sx = frame.Width / (float)W, sy = frame.Height / (float)H;
+            return new RectangleF(view.X * sx, view.Y * sy, view.Width * sx, view.Height * sy);
+        }
+
+        // desfoque de movimento da câmera: mistura um pouco do quadro anterior quando ela anda rápido
+        float MotionBlend(double t, float ts, bool motion)
+        {
+            if (!motion || Style.ZoomBlur <= 0) return 0;
+            double v = CameraSpeed(t, 1000.0 / 30) * ts;
+            float blend = (float)Math.Min(0.5, v / 60.0 * Style.ZoomBlur);
+            return blend < 0.03f ? 0 : blend;
+        }
+
+        // Fundo já no tamanho da tela de destino (refeito só quando o estilo ou o tamanho mudam).
+        Bitmap DeviceBackground(Size outSize, float ts)
+        {
+            var bg = BackgroundLayer(outSize);
+            var devSize = new Size((int)Math.Round(outSize.Width * ts), (int)Math.Round(outSize.Height * ts));
+            if (devSize == outSize) return bg;
+            if (bgDev == null || bgDev.Size != devSize)
+            {
+                if (bgDev != null) bgDev.Dispose();
+                bgDev = new Bitmap(devSize.Width, devSize.Height, PixelFormat.Format32bppRgb);
+                using (var gb = Graphics.FromImage(bgDev))
+                {
+                    gb.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                    gb.DrawImage(bg, new Rectangle(0, 0, devSize.Width, devSize.Height));
+                }
+            }
+            return bgDev;
+        }
+
+        // Cantos arredondados, destaque dos cliques, cursor e webcam (em coordenadas da tela de saída).
+        void DrawOverlays(Graphics g, double t, RectangleF view, RectangleF dst, Size outSize, float zoom)
+        {
             g.CompositingMode = CompositingMode.SourceOver;
             if (HasFrame && Radius >= 0.5f)
                 for (int i = 0; i < 4; i++)
@@ -1029,13 +1181,45 @@ namespace Capturo
 
         public bool CamVisible(double t) { return HasCam && Style.Cam && Cam.Visible(t); }
 
+        CamFx camFx;   // efeitos da câmera (desfoque do fundo, filtros...), com cache do último quadro
+
         void DrawCam(Graphics g, double t, Size outSize, float zoom)
         {
             var frame = Cam.At(t);
             if (frame == null) return;
             var r = CamRect(outSize, zoom);
+            // com efeitos, a câmera é processada no tamanho em que aparece na tela (prévia leve, exportação nítida)
+            Bitmap img = frame;
+            int s = Math.Min(frame.Width, frame.Height);
+            float sx = (frame.Width - s) / 2f, sy = (frame.Height - s) / 2f;
+            bool cutout = false;
+            if (CamFx.Active(Style))
+            {
+                float ts;
+                using (var tm = g.Transform) ts = Math.Abs(tm.Elements[0]);
+                if (camFx == null) camFx = new CamFx();
+                try
+                {
+                    img = camFx.Process(frame, Cam.LastIndex, Style, (int)Math.Ceiling(r.Width * ts * 1.15f));
+                    s = img.Width; sx = sy = 0;
+                    cutout = Style.CamBg == 3 && Segmenter.Available;
+                }
+                catch (Exception ex) { TrayApp.Log("efeito da câmera: " + ex.Message); img = frame; }
+            }
             float rad = r.Width / 2 * Style.CamRound;
+            float k = r.Width / s;
             g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+            if (cutout)
+            {
+                // sem fundo: só a pessoa sobre o vídeo, sem moldura
+                var st = g.Save();
+                if (Style.CamMirror) { g.TranslateTransform(r.Right, r.Y); g.ScaleTransform(-k, k); }
+                else { g.TranslateTransform(r.X, r.Y); g.ScaleTransform(k, k); }
+                g.DrawImage(img, new RectangleF(0, 0, s, s), new RectangleF(0, 0, s, s), GraphicsUnit.Pixel);
+                g.Restore(st);
+                return;
+            }
             // sombra suave em camadas
             if (Style.CamShadow > 0)
             {
@@ -1050,14 +1234,9 @@ namespace Capturo
                         using (var sp = Art.RoundRect(sr, rad + e / 2)) g.FillPath(b, sp);
                     }
             }
-            // recorte quadrado no meio do quadro da câmera
-            int s = Math.Min(frame.Width, frame.Height);
-            float sx = (frame.Width - s) / 2f, sy = (frame.Height - s) / 2f;
-            float k = r.Width / s;
-            using (var tb = new TextureBrush(frame, WrapMode.Clamp))
+            using (var tb = new TextureBrush(img, WrapMode.Clamp))
             using (var path = Art.RoundRect(r, rad))
             {
-                g.InterpolationMode = InterpolationMode.HighQualityBilinear;
                 if (Style.CamMirror)
                 {
                     tb.TranslateTransform(r.Right, r.Y);
@@ -1070,7 +1249,16 @@ namespace Capturo
                 }
                 tb.TranslateTransform(-sx, -sy);
                 g.FillPath(tb, path);
-                using (var pen = new Pen(Color.FromArgb(70, 255, 255, 255), Math.Max(1, r.Width / 160f))) g.DrawPath(pen, path);
+                if (Style.CamBorder > 0.01f)
+                {
+                    // contorno por dentro da borda
+                    float bw = r.Width * 0.045f * Style.CamBorder;
+                    var ir = RectangleF.Inflate(r, -bw / 2, -bw / 2);
+                    using (var ip = Art.RoundRect(ir, Math.Max(0, rad - bw / 2)))
+                    using (var pen = new Pen(Color.FromArgb(Style.CamBorderColor), bw)) g.DrawPath(pen, ip);
+                }
+                else
+                    using (var pen = new Pen(Color.FromArgb(70, 255, 255, 255), Math.Max(1, r.Width / 160f))) g.DrawPath(pen, path);
             }
         }
 
@@ -1181,6 +1369,7 @@ namespace Capturo
             if (bgDev != null) bgDev.Dispose();
             if (scaled != null) scaled.Dispose();
             if (Cam != null) Cam.Dispose();
+            if (camFx != null) camFx.Dispose();
         }
 
         // Cópia independente para exportar em outra thread enquanto o editor continua aberto
@@ -1194,6 +1383,7 @@ namespace Capturo
             c.Speeds = Speeds.Select(z => z.Clone()).ToList();
             c.Style = Style.Clone();
             c.Cam = Cam != null ? Cam.Reopen() : null;
+            c.camFx = null;   // a exportação tem o próprio processador (e a própria sessão do modelo)
             c.track = null; c.cursorTrack = null; c.timeMap = null;
             c.bgCache = null; c.bgKey = null; c.corners = null; c.cornerRects = null;
             c.bgDev = null; c.scaled = null; c.scaler = new Scaler();
@@ -1304,70 +1494,160 @@ namespace Capturo
         }
     }
 
-    // Redimensionamento bilinear simples (o do GDI+ é várias vezes mais lento para quadros grandes),
-    // com mistura opcional com o quadro anterior (desfoque de movimento).
+    // Redimensionamento direto na memória dos bitmaps (o do GDI+ é várias vezes mais lento para quadros
+    // grandes), dividido entre os núcleos do processador, com mistura opcional com o quadro anterior
+    // (desfoque de movimento). Sharp: bicúbico (Catmull-Rom) quando amplia, para o zoom não ficar borrado.
     class Scaler
     {
-        int[] sp, dp, prev;
-        int[] x0, fx;
+        int[] prev;
+        int prevW, prevH;
         bool havePrev;
+        int[] x0, fx;            // bilinear: coluna de origem e fração (0..256)
+        int[] cx, cwx;           // bicúbico: 4 colunas e 4 pesos (x256) por coluna de destino
+        public bool Sharp;
 
         public void Forget() { havePrev = false; }
 
         public void Bilinear(Bitmap src, RectangleF s, Bitmap dst, float blend)
         {
-            int sw = src.Width, sh = src.Height, dw = dst.Width, dh = dst.Height;
-            if (sp == null || sp.Length != sw * sh) sp = new int[sw * sh];
-            if (dp == null || dp.Length != dw * dh) { dp = new int[dw * dh]; prev = new int[dw * dh]; havePrev = false; }
-            var sd = src.LockBits(new Rectangle(0, 0, sw, sh), ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
-            try { for (int y = 0; y < sh; y++) Marshal.Copy(sd.Scan0 + y * sd.Stride, sp, y * sw, sw); }
-            finally { src.UnlockBits(sd); }
+            var dd = dst.LockBits(new Rectangle(0, 0, dst.Width, dst.Height), ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
+            try { ScaleInto(src, s, dd, new Rectangle(0, 0, dst.Width, dst.Height), blend); }
+            finally { dst.UnlockBits(dd); }
+        }
 
-            if (x0 == null || x0.Length != dw) { x0 = new int[dw]; fx = new int[dw]; }
+        // Escreve o recorte s de src no retângulo r de um bitmap já travado (32 bpp).
+        public unsafe void ScaleInto(Bitmap src, RectangleF s, BitmapData dd, Rectangle r, float blend)
+        {
+            int sw = src.Width, sh = src.Height, dw = r.Width, dh = r.Height;
+            if (prev == null || prevW != dw || prevH != dh) { prev = new int[dw * dh]; prevW = dw; prevH = dh; havePrev = false; }
             float kx = s.Width / dw, ky = s.Height / dh;
+            bool cubic = Sharp && kx < 0.98f && ky < 0.98f;   // só quando amplia
+            if (cubic) PrepCubic(s, sw, dw, kx);
+            else PrepLinear(s, sw, dw, kx);
+            bool mix = blend > 0 && havePrev;
+            uint wb = (uint)(blend * 256), wa = 256 - wb;
+            var sd = src.LockBits(new Rectangle(0, 0, sw, sh), ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
+            try
+            {
+                byte* sBase = (byte*)sd.Scan0, dBase = (byte*)dd.Scan0 + (long)r.Y * dd.Stride + r.X * 4;
+                int sStride = sd.Stride, dStride = dd.Stride;
+                int[] pv = prev, X0 = x0, FX = fx, CX = cx, CW = cwx;
+                float sy0 = s.Y;
+                System.Threading.Tasks.Parallel.For(0, dh, y =>
+                {
+                    uint* o = (uint*)(dBase + (long)y * dStride);
+                    float v = sy0 + (y + 0.5f) * ky - 0.5f;
+                    if (cubic) CubicRow(sBase, sStride, sw, sh, v, o, dw, CX, CW);
+                    else
+                    {
+                        v = Math.Max(0, Math.Min(sh - 1.001f, v));
+                        int yi = (int)v; uint fy = (uint)((v - yi) * 256), gy = 256 - fy;
+                        uint* r0 = (uint*)(sBase + (long)yi * sStride), r1 = (uint*)(sBase + (long)Math.Min(yi + 1, sh - 1) * sStride);
+                        for (int x = 0; x < dw; x++)
+                        {
+                            int xi = X0[x];
+                            int xj = xi + 1 < sw ? xi + 1 : xi;
+                            uint f = (uint)FX[x], gx = 256 - f;
+                            uint a = r0[xi], b = r0[xj], c = r1[xi], d = r1[xj];
+                            uint rbT = (((a & 0xFF00FF) * gx + (b & 0xFF00FF) * f) >> 8) & 0xFF00FF;
+                            uint gT = (((a & 0xFF00) * gx + (b & 0xFF00) * f) >> 8) & 0xFF00;
+                            uint rbB = (((c & 0xFF00FF) * gx + (d & 0xFF00FF) * f) >> 8) & 0xFF00FF;
+                            uint gB = (((c & 0xFF00) * gx + (d & 0xFF00) * f) >> 8) & 0xFF00;
+                            uint rb = ((rbT * gy + rbB * fy) >> 8) & 0xFF00FF;
+                            uint gg = ((gT * gy + gB * fy) >> 8) & 0xFF00;
+                            o[x] = 0xFF000000 | rb | gg;
+                        }
+                    }
+                    // guarda a linha para o próximo quadro (e mistura com a anterior, se for o caso)
+                    int po = y * dw;
+                    if (mix)
+                        for (int x = 0; x < dw; x++)
+                        {
+                            uint a = o[x], b = (uint)pv[po + x];
+                            uint rb = (((a & 0xFF00FF) * wa + (b & 0xFF00FF) * wb) >> 8) & 0xFF00FF;
+                            uint gg = (((a & 0xFF00) * wa + (b & 0xFF00) * wb) >> 8) & 0xFF00;
+                            o[x] = 0xFF000000 | rb | gg;
+                            pv[po + x] = (int)o[x];
+                        }
+                    else Marshal.Copy((IntPtr)o, pv, po, dw);
+                });
+            }
+            finally { src.UnlockBits(sd); }
+            havePrev = true;
+        }
+
+        void PrepLinear(RectangleF s, int sw, int dw, float kx)
+        {
+            if (x0 == null || x0.Length != dw) { x0 = new int[dw]; fx = new int[dw]; }
             for (int x = 0; x < dw; x++)
             {
                 float u = s.X + (x + 0.5f) * kx - 0.5f;
                 u = Math.Max(0, Math.Min(sw - 1.001f, u));
                 x0[x] = (int)u; fx[x] = (int)((u - (int)u) * 256);
             }
-            for (int y = 0; y < dh; y++)
+        }
+
+        // Pesos do Catmull-Rom para a fração t (x256, somam 256).
+        static void CubicW(float t, int[] w, int at)
+        {
+            float t2 = t * t, t3 = t2 * t;
+            float w0 = (-t3 + 2 * t2 - t) * 0.5f, w1 = (3 * t3 - 5 * t2 + 2) * 0.5f, w2 = (-3 * t3 + 4 * t2 + t) * 0.5f;
+            int a = (int)Math.Round(w0 * 256), b = (int)Math.Round(w1 * 256), c = (int)Math.Round(w2 * 256);
+            w[at] = a; w[at + 1] = b; w[at + 2] = c; w[at + 3] = 256 - a - b - c;
+        }
+
+        void PrepCubic(RectangleF s, int sw, int dw, float kx)
+        {
+            if (cx == null || cx.Length != dw * 4) { cx = new int[dw * 4]; cwx = new int[dw * 4]; }
+            for (int x = 0; x < dw; x++)
             {
-                float v = s.Y + (y + 0.5f) * ky - 0.5f;
-                v = Math.Max(0, Math.Min(sh - 1.001f, v));
-                int yi = (int)v; uint fy = (uint)((v - yi) * 256), gy = 256 - fy;
-                int r0 = yi * sw, r1 = Math.Min(yi + 1, sh - 1) * sw, o = y * dw;
-                for (int x = 0; x < dw; x++)
-                {
-                    int xi = x0[x];
-                    int xj = xi + 1 < sw ? xi + 1 : xi;
-                    uint f = (uint)fx[x], gx = 256 - f;
-                    uint a = (uint)sp[r0 + xi], b = (uint)sp[r0 + xj], c = (uint)sp[r1 + xi], d = (uint)sp[r1 + xj];
-                    uint rbT = (((a & 0xFF00FF) * gx + (b & 0xFF00FF) * f) >> 8) & 0xFF00FF;
-                    uint gT = (((a & 0xFF00) * gx + (b & 0xFF00) * f) >> 8) & 0xFF00;
-                    uint rbB = (((c & 0xFF00FF) * gx + (d & 0xFF00FF) * f) >> 8) & 0xFF00FF;
-                    uint gB = (((c & 0xFF00) * gx + (d & 0xFF00) * f) >> 8) & 0xFF00;
-                    uint rb = ((rbT * gy + rbB * fy) >> 8) & 0xFF00FF;
-                    uint gg = ((gT * gy + gB * fy) >> 8) & 0xFF00;
-                    dp[o + x] = (int)(0xFF000000 | rb | gg);
-                }
+                float u = s.X + (x + 0.5f) * kx - 0.5f;
+                u = Math.Max(0, Math.Min(sw - 1.001f, u));
+                int ui = (int)Math.Floor(u);
+                for (int k = 0; k < 4; k++) cx[x * 4 + k] = Math.Max(0, Math.Min(sw - 1, ui - 1 + k));
+                CubicW(u - ui, cwx, x * 4);
             }
-            if (blend > 0 && havePrev)
+        }
+
+        static unsafe void CubicRow(byte* sBase, int sStride, int sw, int sh, float v, uint* o, int dw, int[] CX, int[] CW)
+        {
+            v = Math.Max(0, Math.Min(sh - 1.001f, v));
+            int vi = (int)Math.Floor(v);
+            var wy = new int[4];
+            CubicW(v - vi, wy, 0);
+            uint* r0 = (uint*)(sBase + (long)Math.Max(0, vi - 1) * sStride);
+            uint* r1 = (uint*)(sBase + (long)vi * sStride);
+            uint* r2 = (uint*)(sBase + (long)Math.Min(sh - 1, vi + 1) * sStride);
+            uint* r3 = (uint*)(sBase + (long)Math.Min(sh - 1, vi + 2) * sStride);
+            int y0 = wy[0], y1 = wy[1], y2 = wy[2], y3 = wy[3];
+            for (int x = 0; x < dw; x++)
             {
-                uint wb = (uint)(blend * 256), wa = 256 - wb;
-                for (int i = 0; i < dp.Length; i++)
-                {
-                    uint a = (uint)dp[i], b = (uint)prev[i];
-                    uint rb = (((a & 0xFF00FF) * wa + (b & 0xFF00FF) * wb) >> 8) & 0xFF00FF;
-                    uint gg = (((a & 0xFF00) * wa + (b & 0xFF00) * wb) >> 8) & 0xFF00;
-                    dp[i] = (int)(0xFF000000 | rb | gg);
-                }
+                int i = x * 4;
+                int c0 = CX[i], c1 = CX[i + 1], c2 = CX[i + 2], c3 = CX[i + 3];
+                int w0 = CW[i], w1 = CW[i + 1], w2 = CW[i + 2], w3 = CW[i + 3];
+                // primeiro na horizontal (4 linhas), depois na vertical
+                uint p0 = r0[c0], p1 = r0[c1], p2 = r0[c2], p3 = r0[c3];
+                int ra = (int)((p0 >> 16) & 255) * w0 + (int)((p1 >> 16) & 255) * w1 + (int)((p2 >> 16) & 255) * w2 + (int)((p3 >> 16) & 255) * w3;
+                int ga = (int)((p0 >> 8) & 255) * w0 + (int)((p1 >> 8) & 255) * w1 + (int)((p2 >> 8) & 255) * w2 + (int)((p3 >> 8) & 255) * w3;
+                int ba = (int)(p0 & 255) * w0 + (int)(p1 & 255) * w1 + (int)(p2 & 255) * w2 + (int)(p3 & 255) * w3;
+                p0 = r1[c0]; p1 = r1[c1]; p2 = r1[c2]; p3 = r1[c3];
+                int rb = (int)((p0 >> 16) & 255) * w0 + (int)((p1 >> 16) & 255) * w1 + (int)((p2 >> 16) & 255) * w2 + (int)((p3 >> 16) & 255) * w3;
+                int gb = (int)((p0 >> 8) & 255) * w0 + (int)((p1 >> 8) & 255) * w1 + (int)((p2 >> 8) & 255) * w2 + (int)((p3 >> 8) & 255) * w3;
+                int bb = (int)(p0 & 255) * w0 + (int)(p1 & 255) * w1 + (int)(p2 & 255) * w2 + (int)(p3 & 255) * w3;
+                p0 = r2[c0]; p1 = r2[c1]; p2 = r2[c2]; p3 = r2[c3];
+                int rc = (int)((p0 >> 16) & 255) * w0 + (int)((p1 >> 16) & 255) * w1 + (int)((p2 >> 16) & 255) * w2 + (int)((p3 >> 16) & 255) * w3;
+                int gc = (int)((p0 >> 8) & 255) * w0 + (int)((p1 >> 8) & 255) * w1 + (int)((p2 >> 8) & 255) * w2 + (int)((p3 >> 8) & 255) * w3;
+                int bc = (int)(p0 & 255) * w0 + (int)(p1 & 255) * w1 + (int)(p2 & 255) * w2 + (int)(p3 & 255) * w3;
+                p0 = r3[c0]; p1 = r3[c1]; p2 = r3[c2]; p3 = r3[c3];
+                int rd = (int)((p0 >> 16) & 255) * w0 + (int)((p1 >> 16) & 255) * w1 + (int)((p2 >> 16) & 255) * w2 + (int)((p3 >> 16) & 255) * w3;
+                int gd = (int)((p0 >> 8) & 255) * w0 + (int)((p1 >> 8) & 255) * w1 + (int)((p2 >> 8) & 255) * w2 + (int)((p3 >> 8) & 255) * w3;
+                int bd = (int)(p0 & 255) * w0 + (int)(p1 & 255) * w1 + (int)(p2 & 255) * w2 + (int)(p3 & 255) * w3;
+                int r = (ra * y0 + rb * y1 + rc * y2 + rd * y3 + 32768) >> 16;
+                int g = (ga * y0 + gb * y1 + gc * y2 + gd * y3 + 32768) >> 16;
+                int b = (ba * y0 + bb * y1 + bc * y2 + bd * y3 + 32768) >> 16;
+                r = r < 0 ? 0 : r > 255 ? 255 : r; g = g < 0 ? 0 : g > 255 ? 255 : g; b = b < 0 ? 0 : b > 255 ? 255 : b;
+                o[x] = 0xFF000000 | ((uint)r << 16) | ((uint)g << 8) | (uint)b;
             }
-            Buffer.BlockCopy(dp, 0, prev, 0, dp.Length * 4);
-            havePrev = true;
-            var dd = dst.LockBits(new Rectangle(0, 0, dw, dh), ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
-            try { for (int y = 0; y < dh; y++) Marshal.Copy(dp, y * dw, dd.Scan0 + y * dd.Stride, dw); }
-            finally { dst.UnlockBits(dd); }
         }
     }
 }

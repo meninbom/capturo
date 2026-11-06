@@ -120,61 +120,102 @@ namespace Capturo
             double bpp = p.Style.Quality == 0 ? 0.16 : p.Style.Quality == 1 ? 0.10 : 0.06;
             int bitrate = (int)Math.Max(1.5e6, Math.Min(40e6, size.Width * (double)size.Height * fps * bpp));
             float[] audio = p.MixAudio();
-            using (var outBmp = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppRgb))
-            using (var src = new FrameSource(p.RawVideo, p.W, p.H, p.TrimStart))
+            // três etapas em paralelo: decodificar (FrameSource), montar o quadro (thread "montar")
+            // e codificar (esta thread, dona do codificador do Media Foundation)
+            var ready = new BlockingCollection<Tuple<Bitmap, int>>(2);
+            var free = new BlockingCollection<Bitmap>();
+            var outs = new List<Bitmap>();
+            var stop = new CancellationTokenSource();
+            Exception renderError = null;
+            Thread render = null;
+            p.SharpZoom = true;
+            try
             {
-                // codificador por software primeiro: na exportação ele costuma ser mais rápido e mais previsível
-                Mp4Writer w;
-                try { w = new Mp4Writer(path, size.Width, size.Height, fps, bitrate, audio != null ? 48000 : 0, 2, false); }
-                catch
+                for (int i = 0; i < 3; i++) { var b = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppRgb); outs.Add(b); free.Add(b); }
+                using (var src = new FrameSource(p.RawVideo, p.W, p.H, p.TrimStart))
                 {
-                    try { File.Delete(path); } catch { }
-                    w = new Mp4Writer(path, size.Width, size.Height, fps, bitrate, audio != null ? 48000 : 0, 2, true);
-                }
-                using (w)
-                {
-                    double len = p.OutDuration;      // já com os trechos de velocidade
-                    int n = Math.Max(1, (int)(len * fps / 1000));
-                    long period = 10000000L / fps;
-                    long audioDone = 0;
-                    var pcm = new short[4800 * 2];
-                    float sc = size.Width / (float)full.Width;
-                    for (int i = 0; i < n; i++)
+                    try
                     {
-                        if (cancelled()) return;
-                        double t = p.SourceAt(i * 1000.0 / fps);
-                        var frame = src.At((long)(t * 10000));
-                        if (frame == null) break;
-                        using (var g = Graphics.FromImage(outBmp))
+                        // codificador por software primeiro: na exportação ele costuma ser mais rápido e mais previsível
+                        Mp4Writer w;
+                        try { w = new Mp4Writer(path, size.Width, size.Height, fps, bitrate, audio != null ? 48000 : 0, 2, false, true); }
+                        catch
                         {
-                            if (sc < 0.999f) g.ScaleTransform(sc, sc);
-                            p.Render(g, frame, t, true);
+                            try { File.Delete(path); } catch { }
+                            w = new Mp4Writer(path, size.Width, size.Height, fps, bitrate, audio != null ? 48000 : 0, 2, true, true);
                         }
-                        var d = outBmp.LockBits(new Rectangle(0, 0, size.Width, size.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
-                        try { w.WriteVideo(d.Scan0, d.Stride, i * period, period); }
-                        finally { outBmp.UnlockBits(d); }
-                        // áudio acompanha o vídeo, em blocos de 100 ms
-                        if (audio != null)
+                        using (w)
                         {
-                            long want = Math.Min(audio.Length / 2, (long)((i + 1) * 48000L / fps) + 4800);
-                            while (audioDone < want)
+                            double len = p.OutDuration;      // já com os trechos de velocidade
+                            int n = Math.Max(1, (int)(len * fps / 1000));
+                            long period = 10000000L / fps;
+                            float sc = size.Width / (float)full.Width;
+                            render = new Thread(() =>
                             {
-                                int k = (int)Math.Min(4800, audio.Length / 2 - audioDone);
-                                if (k <= 0) break;
-                                for (int j = 0; j < k * 2; j++)
+                                try
                                 {
-                                    float v = audio[audioDone * 2 + j];
-                                    pcm[j] = (short)Math.Max(-32767, Math.Min(32767, v * 32767));
+                                    for (int i = 0; i < n && !stop.IsCancellationRequested; i++)
+                                    {
+                                        double t = p.SourceAt(i * 1000.0 / fps);
+                                        var frame = src.At((long)(t * 10000));
+                                        if (frame == null) break;
+                                        Bitmap outBmp = free.Take(stop.Token);
+                                        p.RenderInto(outBmp, sc, frame, t, true);
+                                        ready.Add(Tuple.Create(outBmp, i), stop.Token);
+                                    }
                                 }
-                                w.WriteAudio(pcm, k, audioDone * 10000000L / 48000);
-                                audioDone += k;
+                                catch (OperationCanceledException) { }
+                                catch (Exception ex) { renderError = ex; }
+                                finally { ready.CompleteAdding(); }
+                            }) { IsBackground = true, Name = "montar" };
+                            render.Start();
+
+                            long audioDone = 0;
+                            var pcm = new short[4800 * 2];
+                            foreach (var item in ready.GetConsumingEnumerable())
+                            {
+                                var outBmp = item.Item1; int i = item.Item2;
+                                if (cancelled()) return;
+                                var d = outBmp.LockBits(new Rectangle(0, 0, size.Width, size.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppRgb);
+                                try { w.WriteVideo(d.Scan0, d.Stride, i * period, period); }
+                                finally { outBmp.UnlockBits(d); free.Add(outBmp); }
+                                // áudio acompanha o vídeo, em blocos de 100 ms
+                                if (audio != null)
+                                {
+                                    long want = Math.Min(audio.Length / 2, (long)((i + 1) * 48000L / fps) + 4800);
+                                    while (audioDone < want)
+                                    {
+                                        int k = (int)Math.Min(4800, audio.Length / 2 - audioDone);
+                                        if (k <= 0) break;
+                                        for (int j = 0; j < k * 2; j++)
+                                        {
+                                            float v = audio[audioDone * 2 + j];
+                                            pcm[j] = (short)Math.Max(-32767, Math.Min(32767, v * 32767));
+                                        }
+                                        w.WriteAudio(pcm, k, audioDone * 10000000L / 48000);
+                                        audioDone += k;
+                                    }
+                                }
+                                if (i % 5 == 0) progress((i + 1) / (double)n);
                             }
+                            if (renderError != null) throw renderError;
+                            w.Finish();
+                            progress(1);
                         }
-                        if (i % 5 == 0) progress((i + 1) / (double)n);
                     }
-                    w.Finish();
-                    progress(1);
+                    finally
+                    {
+                        // a montagem para antes de o decodificador ser fechado
+                        stop.Cancel();
+                        if (render != null) render.Join();
+                    }
                 }
+            }
+            finally
+            {
+                p.SharpZoom = false;
+                foreach (var b in outs) b.Dispose();
+                stop.Dispose();
             }
         }
 

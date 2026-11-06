@@ -395,6 +395,7 @@ namespace Capturo
         }
 
         static string Pct(float v) { return (int)Math.Round(v * 100) + "%"; }
+        static string Secs(float v) { return v.ToString("0.0", System.Globalization.CultureInfo.GetCultureInfo("pt-BR")) + " s"; }
 
         void BuildZoomPage(UiColumn c, int w)
         {
@@ -435,9 +436,13 @@ namespace Capturo
             zoomDepth = Segmented(c, "Profundidade", DepthNames, () => DepthIndex(p.Style.Depth), i =>
             {
                 p.Style.Depth = Depths[i];
-                foreach (var z in p.Zooms) if (z.Auto) z.Depth = Depths[i];   // os automáticos acompanham
+                foreach (var z in p.Zooms) if (z.Auto) z.Depth = z.Fit > 0 ? Math.Min(Depths[i], z.Fit) : Depths[i];   // os automáticos acompanham (sem passar do que cabe)
             }, w);
-            Segmented(c, "Animação", new[] { "Rápida", "Suave" }, () => p.Style.Speed, i => p.Style.Speed = i, w);
+            // duração da animação: à direita fica mais lenta
+            Slider(c, "Duração do zoom (entrar e sair)", 0.4f, 4f, 0.1f, () => p.Style.ZoomTime, v => p.Style.ZoomTime = v,
+                v => (v < 0.9f ? "Rápida" : v < 2f ? "Suave" : v < 3f ? "Lenta" : "Bem lenta") + " · " + Secs(v), w);
+            Slider(c, "Tempo em foco depois do clique", 0.3f, 8f, 0.1f, () => p.Style.ZoomHold,
+                v => { p.Style.ZoomHold = v; p.BuildAutoZooms(); Select(null); }, Secs, w);
             Toggle(c, "Câmera segue o cursor", () => p.Style.Follow, v => p.Style.Follow = v, w);
             Toggle(c, "Deslizar entre zooms próximos", () => p.Style.Connect, v => p.Style.Connect = v, w);
             Slider(c, "Desfoque de movimento", 0, 1, 0.05f, () => p.Style.ZoomBlur, v => p.Style.ZoomBlur = v, Pct, w);
@@ -493,6 +498,27 @@ namespace Capturo
             Toggle(c, "Espelhar (como num espelho)", () => p.Style.CamMirror, v => p.Style.CamMirror = v, w);
             Toggle(c, "Diminuir durante o zoom", () => p.Style.CamShrink, v => p.Style.CamShrink = v, w);
             c.Controls.Add(new UiNote("Onde a câmera foi desligada durante a gravação, ela some do vídeo.", w));
+
+            c.Controls.Add(new UiSection("Efeitos", w));
+            Segmented(c, "Fundo", new[] { "Normal", "Desfocar", "Cor", "Sem fundo" }, () => p.Style.CamBg, i => p.Style.CamBg = i, w);
+            Slider(c, "Intensidade do desfoque", 0, 1, 0.05f, () => p.Style.CamBlur, v => p.Style.CamBlur = v, Pct, w);
+            var bgColors = new ColorRow(this, new[] { 0xFF1E293B, 0xFFF1F5F9, 0xFF7B5CFA, 0xFF2563EB, 0xFF10B981, 0xFFF59E0B }, w, "Cor do fundo", () => p.Style.CamBgColor);
+            bgColors.Picked += v => { p.Style.CamBgColor = v; if (p.Style.CamBg != 2) { p.Style.CamBg = 2; RefreshAll(); } StyleEdited(true); };
+            refreshers.Add(() => bgColors.Invalidate());
+            c.Controls.Add(bgColors);
+            if (!Segmenter.Available)
+                c.Controls.Add(new UiNote("Desfocar ou trocar o fundo precisa do Windows ML (Windows 10 de 2018 em diante)" + (Segmenter.Error != null ? ": " + Segmenter.Error : "."), w));
+            else
+                c.Controls.Add(new UiNote("A pessoa é separada do fundo por um modelo de IA que roda no seu computador. Nada é enviado para a internet.", w));
+            // filtros em duas linhas (seis não cabem numa só); a escolhida numa linha apaga a da outra
+            Segmented(c, "Filtro", new[] { "Nenhum", "Vívido", "P&B" }, () => p.Style.CamFilter <= 2 ? p.Style.CamFilter : -1, i => { p.Style.CamFilter = i; RefreshAll(); }, w);
+            Segmented(c, null, new[] { "Sépia", "Quente", "Frio" }, () => p.Style.CamFilter >= 3 ? p.Style.CamFilter - 3 : -1, i => { p.Style.CamFilter = i + 3; RefreshAll(); }, w);
+            Slider(c, "Brilho", -0.5f, 0.5f, 0.05f, () => p.Style.CamBright, v => p.Style.CamBright = v, v => (v > 0.001f ? "+" : "") + Pct(v), w);
+            Slider(c, "Contorno", 0, 1, 0.05f, () => p.Style.CamBorder, v => p.Style.CamBorder = v, v => v <= 0.01f ? "Só um fio" : Pct(v), w);
+            var borderColors = new ColorRow(this, new[] { 0xFFFFFFFF, 0xFF111827, 0xFF7B5CFA, 0xFF2563EB, 0xFFEC4899, 0xFFF59E0B }, w, "Cor do contorno", () => p.Style.CamBorderColor);
+            borderColors.Picked += v => { p.Style.CamBorderColor = v; if (p.Style.CamBorder <= 0.01f) { p.Style.CamBorder = 0.4f; RefreshAll(); } StyleEdited(true); };
+            refreshers.Add(() => borderColors.Invalidate());
+            c.Controls.Add(borderColors);
         }
 
         void BuildCursorPage(UiColumn c, int w)
@@ -1245,21 +1271,25 @@ namespace Capturo
             public event Action<int> Picked;
             readonly VideoEditorForm f;
             readonly int[] colors;
-            public ColorRow(VideoEditorForm f, uint[] colors, int width)
+            readonly string label;
+            readonly Func<int> current;
+            public ColorRow(VideoEditorForm f, uint[] colors, int width) : this(f, colors, width, "Cor do efeito", null) { }
+            public ColorRow(VideoEditorForm f, uint[] colors, int width, string label, Func<int> current)
             {
                 this.f = f; this.colors = colors.Select(c => unchecked((int)c)).ToArray();
+                this.label = label; this.current = current ?? (() => f.p.Style.ClickColor);
                 Width = width; Height = Ui.D(52); Cursor = Cursors.Hand;
             }
             Rectangle Cell(int i) { int s = Ui.D(26), gap = Ui.D(10); return new Rectangle(i * (s + gap) + Ui.D(2), Ui.D(22), s, s); }
             protected override void OnPaint(PaintEventArgs e)
             {
                 var g = Smooth(e);
-                Ui.Draw(g, "Cor do efeito", Ui.Font, Ui.Text, new Rectangle(0, 0, Width, Ui.D(20)), ContentAlignment.MiddleLeft);
+                Ui.Draw(g, label, Ui.Font, Ui.Text, new Rectangle(0, 0, Width, Ui.D(20)), ContentAlignment.MiddleLeft);
                 for (int i = 0; i < colors.Length; i++)
                 {
                     var r = Cell(i);
                     using (var b = new SolidBrush(Color.FromArgb(colors[i]))) g.FillEllipse(b, r);
-                    if (colors[i] == f.p.Style.ClickColor)
+                    if (colors[i] == current())
                         using (var pen = new Pen(Color.White, Ui.D(2))) g.DrawEllipse(pen, r.X - Ui.D(3), r.Y - Ui.D(3), r.Width + Ui.D(6), r.Height + Ui.D(6));
                 }
             }

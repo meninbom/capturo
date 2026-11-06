@@ -427,6 +427,7 @@ namespace Capturo
         public CamTrack Reopen() { return Open(path); }
 
         public int FirstTime { get { return times[0]; } }
+        public int LastIndex { get { return lastIndex; } }   // quadro devolvido pelo último At
 
         Bitmap Decode(int i)
         {

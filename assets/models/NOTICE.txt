@@ -1,0 +1,12 @@
+selfie_segmentation.onnx
+========================
+
+MediaPipe Selfie Segmentation (Google), convertido para ONNX por onnx-community
+(https://huggingface.co/onnx-community/mediapipe_selfie_segmentation).
+Licença: Apache License 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
+
+Alteração feita pelo Capturo: o campo "ir_version" do arquivo foi trocado de 10 para 9,
+para o modelo abrir no Windows ML que já vem no Windows (os operadores usados são do opset 14,
+suportado por essa versão). Os pesos não foram modificados.
+
+Usado pelo editor de vídeo para separar a pessoa do fundo na webcam (desfocar ou trocar o fundo).

@@ -309,7 +309,9 @@ namespace Capturo
             {
                 long period = 10000000L / Fps;      // 100 ns
                 long lastSlot = -1, tick = 0;
-                double half = 1000.0 / Fps / 2;     // o mouse é lido duas vezes por quadro
+                // o mouse é lido a 120 Hz (pelo menos duas vezes por quadro): o cursor suavizado do editor
+                // fica mais fiel ao movimento real, sem "cantos" entre uma leitura e outra
+                double half = Math.Min(1000.0 / Fps / 2, 1000.0 / 120);
                 while (!stopping)
                 {
                     if (paused) { Thread.Sleep(10); continue; }

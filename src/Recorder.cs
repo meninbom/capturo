@@ -616,11 +616,12 @@ namespace Capturo
     // Contagem regressiva da captura com atraso. Some da tela antes da captura acontecer.
     class CountdownForm : Form
     {
+        [System.Runtime.InteropServices.DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
         public event Action Done;
         readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
         readonly float k;
         readonly Font big, small;
-        int left;
+        int left, ticks;
         readonly string label;
 
         int D(float v) { return (int)Math.Round(v * k); }
@@ -646,9 +647,13 @@ namespace Capturo
                 ? new Rectangle(mon.Left + (mon.Width - w) / 2, mon.Bottom - h - D(28), w, h)
                 : new Rectangle(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h);
             using (var path = Art.RoundRect(new RectangleF(0, 0, w, h), D(14))) Region = new Region(path);
-            timer.Interval = 1000;
+            // a janela não recebe o teclado (não rouba o foco do que vai ser capturado):
+            // o Esc é lido direto do teclado, a cada 100 ms
+            timer.Interval = 100;
             timer.Tick += (s, e) =>
             {
+                if ((GetAsyncKeyState(0x1B) & 0x8000) != 0) { timer.Stop(); Close(); return; }   // Esc: cancela
+                if (++ticks % 10 != 0) return;
                 left--;
                 if (left > 0) { Invalidate(); return; }
                 timer.Stop();
@@ -683,7 +688,10 @@ namespace Capturo
             g.Clear(Color.FromArgb(24, 24, 30));
             using (var sf = new StringFormat { LineAlignment = StringAlignment.Center })
             {
-                g.DrawString(label, small, Brushes.Gainsboro, new RectangleF(D(22), 0, D(130), Height), sf);
+                g.DrawString(label, small, Brushes.Gainsboro, new RectangleF(D(22), 0, D(130), Height * 0.62f), sf);
+                using (var hint = new Font(small.FontFamily, small.Size * 0.78f, FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var hb = new SolidBrush(Color.FromArgb(150, 150, 165)))
+                    g.DrawString("Esc cancela", hint, hb, new RectangleF(D(22), Height * 0.5f, D(130), Height * 0.42f), sf);
                 using (var acc = new SolidBrush(Color.FromArgb(160, 130, 255)))
                     g.DrawString(left.ToString(), big, acc, new RectangleF(D(150), 0, D(70), Height), sf);
             }

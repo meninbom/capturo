@@ -312,6 +312,8 @@ namespace Capturo
         public bool HasAudio;
         public int AudioRate, AudioChannels;
         int stride;
+        bool nv12;
+        IntPtr bgra; int bgraBytes;
 
         public Mp4Reader(string path, bool video, bool audio)
         {
@@ -332,8 +334,15 @@ namespace Capturo
                     r.SetStreamSelection(MF.FIRST_VIDEO_STREAM, true);
                     IMFAttributes t; MF.MFCreateMediaType(out t);
                     t.SetGUID(MF.MT_MAJOR_TYPE, MF.MediaType_Video);
-                    t.SetGUID(MF.MT_SUBTYPE, MF.VideoFormat_RGB32);
-                    r.SetCurrentMediaType(MF.FIRST_VIDEO_STREAM, IntPtr.Zero, t);
+                    // NV12 (o formato do decodificador): a conversão para BGRA é feita aqui, em paralelo.
+                    // O conversor do Windows faz isso num núcleo só e era a etapa mais lenta da exportação.
+                    t.SetGUID(MF.MT_SUBTYPE, MF.VideoFormat_NV12);
+                    try { r.SetCurrentMediaType(MF.FIRST_VIDEO_STREAM, IntPtr.Zero, t); nv12 = true; }
+                    catch
+                    {
+                        t.SetGUID(MF.MT_SUBTYPE, MF.VideoFormat_RGB32);
+                        r.SetCurrentMediaType(MF.FIRST_VIDEO_STREAM, IntPtr.Zero, t);
+                    }
                     MF.Release(t);
                     ReadVideoType();
                     VisibleWidth = Width; VisibleHeight = Height;
@@ -380,7 +389,7 @@ namespace Capturo
             ulong fs; cur.GetUINT64(MF.MT_FRAME_SIZE, out fs);
             Width = (int)(fs >> 32); Height = (int)(fs & 0xffffffff);
             int st;
-            stride = cur.GetUINT32(MF.MT_DEFAULT_STRIDE, out st) == 0 ? st : Width * 4;
+            stride = cur.GetUINT32(MF.MT_DEFAULT_STRIDE, out st) == 0 ? st : nv12 ? Width : Width * 4;
             MF.Release(cur);
         }
 
@@ -413,7 +422,7 @@ namespace Capturo
                         {
                             IntPtr scan0; int pitch;
                             b2.Lock2D(out scan0, out pitch);
-                            try { use(scan0, pitch, time); } finally { b2.Unlock2D(); }
+                            try { Deliver(use, scan0, pitch, time); } finally { b2.Unlock2D(); }
                         }
                         else
                         {
@@ -421,7 +430,8 @@ namespace Capturo
                             buf.Lock(out p, out max, out cur);
                             try
                             {
-                                if (stride < 0) use(p + (Height - 1) * -stride, stride, time);
+                                if (nv12) Deliver(use, p, stride, time);
+                                else if (stride < 0) use(p + (Height - 1) * -stride, stride, time);
                                 else use(p, stride, time);
                             }
                             finally { buf.Unlock(); }
@@ -432,6 +442,19 @@ namespace Capturo
                 finally { MF.Release(s); }
                 return true;
             }
+        }
+
+        void Deliver(FrameAction use, IntPtr scan0, int pitch, long time)
+        {
+            if (!nv12) { use(scan0, pitch, time); return; }
+            int need = Width * Height * 4;
+            if (bgra == IntPtr.Zero || bgraBytes < need)
+            {
+                if (bgra != IntPtr.Zero) Marshal.FreeHGlobal(bgra);
+                bgra = Marshal.AllocHGlobal(need); bgraBytes = need;
+            }
+            Nv12.ToBgra(scan0, pitch, Height, bgra, Width, Height);
+            use(bgra, Width * 4, time);
         }
 
         // Próximo bloco de áudio PCM 16 bits (intercalado). null no fim.
@@ -464,12 +487,40 @@ namespace Capturo
         public void Dispose()
         {
             if (r != null) { MF.Release(r); r = null; MF.Stop(); }
+            if (bgra != IntPtr.Zero) { Marshal.FreeHGlobal(bgra); bgra = IntPtr.Zero; }
         }
     }
 
     // BGRA -> NV12 (BT.709, faixa 16-235: o padrão que os decodificadores usam para vídeo HD), em 4 partes paralelas. ~1 ms de tempo por quadro 1080p.
     static class Nv12
     {
+        // NV12 (BT.709, 16-235) -> BGRA, dividido entre os núcleos. planeH: altura do plano Y no buffer.
+        public static unsafe void ToBgra(IntPtr src, int pitch, int planeH, IntPtr dst, int w, int h)
+        {
+            byte* y0 = (byte*)src, uv0 = y0 + (long)pitch * planeH, d0 = (byte*)dst;
+            int pairs = h / 2;
+            System.Threading.Tasks.Parallel.For(0, pairs, py =>
+            {
+                byte* uv = uv0 + (long)py * pitch;
+                for (int k = 0; k < 2; k++)
+                {
+                    int yy = py * 2 + k;
+                    byte* ys = y0 + (long)yy * pitch;
+                    uint* o = (uint*)(d0 + (long)yy * w * 4);
+                    for (int x = 0; x < w; x++)
+                    {
+                        int c = (ys[x] - 16) * 298;
+                        int u = uv[x & ~1] - 128, v = uv[(x & ~1) + 1] - 128;
+                        int r = (c + 459 * v + 128) >> 8;
+                        int g = (c - 55 * u - 136 * v + 128) >> 8;
+                        int b = (c + 541 * u + 128) >> 8;
+                        r = r < 0 ? 0 : r > 255 ? 255 : r; g = g < 0 ? 0 : g > 255 ? 255 : g; b = b < 0 ? 0 : b > 255 ? 255 : b;
+                        o[x] = 0xFF000000u | ((uint)r << 16) | ((uint)g << 8) | (uint)b;
+                    }
+                }
+            });
+        }
+
         public static unsafe void FromBgra(IntPtr src, int srcStride, IntPtr dst, int w, int h)
         {
             byte* s0 = (byte*)src, y0 = (byte*)dst, uv0 = y0 + w * h;
@@ -490,7 +541,7 @@ namespace Capturo
                         yb[0] = (byte)(((47 * q10 + 157 * g10 + 16 * b10 + 128) >> 8) + 16);
                         yb[1] = (byte)(((47 * q11 + 157 * g11 + 16 * b11 + 128) >> 8) + 16);
                         int r = q00 + q01 + q10 + q11, g = g00 + g01 + g10 + g11, b = b00 + b01 + b10 + b11;   // média de 4 (x4)
-                        uv[0] = (byte)(((-26 * r - 87 * g + 112 * b + 512) >> 10) + 128);
+                        uv[0] = (byte)(((-26 * r - 86 * g + 112 * b + 512) >> 10) + 128);   // pesos somam 0: cinza fica cinza
                         uv[1] = (byte)(((112 * r - 102 * g - 10 * b + 512) >> 10) + 128);
                         r0 += 8; r1 += 8; ya += 2; yb += 2; uv += 2;
                     }
