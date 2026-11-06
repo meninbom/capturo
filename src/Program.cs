@@ -86,6 +86,34 @@ namespace Capturo
             return list;
         }
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder sb, int max);
+        [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")] static extern uint GetWindowPid(IntPtr hWnd, out uint pid);
+
+        // "Aplicativo — Título" da janela (como no seletor de fontes do Recordly)
+        public static string WindowLabel(IntPtr h)
+        {
+            var sb = new System.Text.StringBuilder(256);
+            GetWindowText(h, sb, sb.Capacity);
+            string title = sb.ToString().Trim(), app = null;
+            try
+            {
+                uint pid;
+                GetWindowPid(h, out pid);
+                using (var p = System.Diagnostics.Process.GetProcessById((int)pid))
+                {
+                    try { app = p.MainModule.FileVersionInfo.FileDescription; } catch { }
+                    if (string.IsNullOrEmpty(app)) app = p.ProcessName;
+                }
+            }
+            catch { }
+            app = app == null ? "" : app.Trim();
+            string label = app.Length == 0 ? title
+                : title.Length == 0 || title.IndexOf(app, StringComparison.OrdinalIgnoreCase) >= 0 ? (title.Length == 0 ? app : title)
+                : app + " — " + title;
+            if (label.Length == 0) label = "Janela";
+            return label.Length > 70 ? label.Substring(0, 67) + "…" : label;
+        }
+
         public static bool Down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
         public static void ForceForeground(IntPtr hwnd)
@@ -463,6 +491,7 @@ namespace Capturo
     static class Art
     {
         public static readonly Color Accent = Color.FromArgb(124, 77, 255);
+        public static readonly Color PickBlue = Color.FromArgb(10, 132, 255);   // seleção da fonte da gravação (como no Recordly)
         public static readonly Color Ink = Color.FromArgb(52, 52, 60);
         public static readonly Color Pill = Color.FromArgb(232, 24, 24, 30);
 
@@ -1309,7 +1338,7 @@ namespace Capturo
         void Flash(string text) { flash = text; flashUntil = DateTime.Now.AddSeconds(1.2); Invalidate(); }
 
         // ---------- lupa
-        bool ShowLoupe { get { return !hasSel || drag == Drag.NewSel || drag == Drag.Resize; } }
+        bool ShowLoupe { get { return !RecMode && (!hasSel || drag == Drag.NewSel || drag == Drag.Resize); } }
 
         void LoupeLayout(Point p, out Rectangle box, out Rectangle info)
         {
@@ -1628,7 +1657,14 @@ namespace Capturo
                     int wi = windows.IndexOf(w);
                     selWindow = wi >= 0 && wi < windowHandles.Count ? windowHandles[wi] : IntPtr.Zero;
                     selWindowRect = w;
-                    if (VideoMode && selWindow != IntPtr.Zero) Flash("Vai gravar só esta janela (mesmo se ela for movida)");
+                    if (RecMode)
+                    {
+                        // como no Recordly: clicar numa janela (ou na área de trabalho) já escolhe a fonte e grava
+                        drag = Drag.None;
+                        DoAction(DefaultAction);
+                        if (!IsDisposed) { LayoutBars(); Invalidate(); }   // não gravou (área pequena demais)
+                        return;
+                    }
                 }
                 else hasSel = false;
             }
@@ -2182,6 +2218,12 @@ namespace Capturo
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
 
+            if (RecMode && (!hasSel || sel.Width == 0))
+            {
+                if (drag != Drag.NewSel) DrawRecTarget(g, HitWindow(mouse));
+                DrawRecHint(g);
+                return;
+            }
             if (!hasSel || sel.Width == 0)
             {
                 DrawWindowHover(g, HitWindow(mouse));
@@ -2245,6 +2287,7 @@ namespace Capturo
                 if (hover != null && drag == Drag.None) DrawTooltip(g, hover);
             }
 
+            if (RecMode && drag == Drag.None) DrawRecHint(g);
             if (ShowLoupe && drag != Drag.None) DrawLoupe(g, mouse);
         }
 
@@ -2280,13 +2323,75 @@ namespace Capturo
 
         void DrawHint(Graphics g)
         {
-            var mon = MonitorAt(mouse);
             // segmentos: texto normal e "teclas"
             object[][] segs = {
-                new object[] { VideoMode ? "Arraste para gravar uma área, ou clique numa janela para gravar só ela" : GifMode ? "Selecione a área do GIF (arraste ou clique numa janela)" : "Arraste para selecionar ou clique numa janela", false },
+                new object[] { "Arraste para selecionar ou clique numa janela", false },
                 new object[] { "Ctrl+A", true }, new object[] { "tela inteira", false },
                 new object[] { "Ctrl+C", true }, new object[] { "copiar cor", false },
                 new object[] { "Esc", true }, new object[] { "sair", false } };
+            DrawHintSegs(g, segs, false);
+        }
+
+        // ---------- gravação (vídeo/GIF): seleção da fonte no estilo do Recordly
+        bool RecMode { get { return VideoMode || GifMode; } }
+        readonly Dictionary<IntPtr, string> winLabels = new Dictionary<IntPtr, string>();
+
+        string TargetLabel(Rectangle r)
+        {
+            int i = windows.IndexOf(r);
+            IntPtr h = i >= 0 && i < windowHandles.Count ? windowHandles[i] : IntPtr.Zero;
+            if (h == IntPtr.Zero) return Screen.AllScreens.Length > 1 ? "Tela inteira (este monitor)" : "Tela inteira";
+            string s;
+            if (!winLabels.TryGetValue(h, out s)) { s = Native.WindowLabel(h); winLabels[h] = s; }
+            return s;
+        }
+
+        // Destaca a janela (ou o monitor) sob o cursor: realce azul, contorno e o nome com as medidas.
+        void DrawRecTarget(Graphics g, Rectangle r)
+        {
+            if (r.Width <= 0 || r.Height <= 0) return;
+            g.CompositingMode = CompositingMode.SourceCopy;
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(shot, r, r, GraphicsUnit.Pixel);
+            g.CompositingMode = CompositingMode.SourceOver;
+            g.PixelOffsetMode = PixelOffsetMode.Default;
+            using (var tint = new SolidBrush(Color.FromArgb(40, Art.PickBlue))) g.FillRectangle(tint, r);
+            g.SmoothingMode = SmoothingMode.None;
+            float w = Math.Max(2, 2 * scale);
+            using (var pen = new Pen(Art.PickBlue, w)) { pen.Alignment = PenAlignment.Inset; g.DrawRectangle(pen, r.X, r.Y, r.Width, r.Height); }
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            string text = TargetLabel(r) + "  ·  " + r.Width + " × " + r.Height;
+            int pillH = fontUiB.Height + S(8);
+            // acima da borda quando cabe; senão, por dentro
+            var at = new Point(r.X + S(6), r.Y - pillH - S(6) >= MonitorAt(r.Location).Y ? r.Y - pillH - S(6) : r.Y + S(8));
+            DrawPill(g, text, at, fontUiB, Art.PickBlue, Color.White);
+        }
+
+        void DrawRecHint(Graphics g)
+        {
+            object[][] segs;
+            if (!hasSel || sel.Width == 0)
+                segs = new[] {
+                    new object[] { "Clique numa janela ou na área de trabalho, ou arraste uma área", false },
+                    new object[] { "Esc", true }, new object[] { "cancelar", false } };
+            else if (sel.Width < 16 || sel.Height < 16)
+                segs = new[] {
+                    new object[] { "Área pequena demais · arraste para aumentar", false },
+                    new object[] { "Esc", true }, new object[] { "cancelar", false } };
+            else
+                segs = new[] {
+                    new object[] { "Mova ou redimensione a área", false },
+                    new object[] { "Enter", true }, new object[] { "gravar", false },
+                    new object[] { "Botão direito", true }, new object[] { "escolher outra", false },
+                    new object[] { "Esc", true }, new object[] { "cancelar", false } };
+            DrawHintSegs(g, segs, true);
+        }
+
+        // Aviso em pílula, centralizado no monitor do cursor (no topo ou embaixo, como no Recordly).
+        void DrawHintSegs(Graphics g, object[][] segs, bool bottom)
+        {
+            var mon = MonitorAt(mouse);
             int padX = S(14), gap = S(8), kpad = S(6);
             float total = 0;
             foreach (var s in segs)
@@ -2295,7 +2400,7 @@ namespace Capturo
                 total += sz.Width + ((bool)s[1] ? kpad * 2 : 0) + gap;
             }
             int h = S(36);
-            var r = new RectangleF(mon.X + (mon.Width - total - padX * 2) / 2f, mon.Y + S(24), total + padX * 2 - gap, h);
+            var r = new RectangleF(mon.X + (mon.Width - total - padX * 2) / 2f, bottom ? mon.Bottom - S(96) - h : mon.Y + S(24), total + padX * 2 - gap, h);
             Art.Shadow(g, r, h / 2f, scale);
             Art.FillRound(g, Art.Pill, r, h / 2f);
             float x = r.X + padX;
@@ -2882,7 +2987,7 @@ namespace Capturo
             var vEditor = new RadioButton { Text = "Abrir o editor (zoom, cursor, fundo, corte)", Checked = S.VidOpenEditor, Location = P(16, 28), AutoSize = true };
             var vDirect = new RadioButton { Text = "Exportar o MP4 direto, com o último estilo usado", Checked = !S.VidOpenEditor, Location = P(16, 58), AutoSize = true };
             ga.Controls.Add(vEditor); ga.Controls.Add(vDirect);
-            pgVideo.Controls.Add(new Label { Text = "O microfone, o som do computador e a webcam também podem ser ligados ou desligados durante a gravação, na barra que aparece embaixo da área. Clique numa janela (em vez de arrastar) para gravar só ela, mesmo se for movida ou coberta.", Location = P(12, 368), Size = new Size(D(450), D(62)), ForeColor = SystemColors.GrayText });
+            pgVideo.Controls.Add(new Label { Text = "O microfone, o som do computador e a webcam também podem ser escolhidos no painel que aparece antes da contagem, e ligados ou desligados durante a gravação. Clique numa janela para gravar só ela (mesmo se for movida ou coberta), ou na área de trabalho para gravar a tela inteira.", Location = P(12, 368), Size = new Size(D(450), D(62)), ForeColor = SystemColors.GrayText });
 
             var ok = new Button { Text = "Salvar", Location = P(310, 470), Size = new Size(D(86), D(30)) };
             var cancel = new Button { Text = "Cancelar", Location = P(402, 470), Size = new Size(D(86), D(30)), DialogResult = DialogResult.Cancel };
@@ -3183,6 +3288,39 @@ namespace Capturo
 
         // window: grava essa janela (Windows Graphics Capture) em vez do retângulo da tela
         public void StartVideo(Rectangle area, IntPtr window)
+        {
+            if (VideoRecorder.Current != null) return;
+            if (preRec != null && !preRec.IsDisposed) return;
+            // antes da contagem: painel com microfone, som do computador, webcam e contagem
+            List<string> cams;
+            try { cams = Webcam.Devices(); } catch { cams = new List<string>(); }
+            var frame = new RecFrame(area) { Armed = true };
+            var pre = new PreRecBar(area, cams)
+            {
+                MicOn = S.RecMic, SysOn = S.RecSys,
+                CamOn = S.VidCam && cams.Count > 0,
+                CamName = cams.Contains(S.VidCamName) ? S.VidCamName : (cams.Count > 0 ? cams[0] : null),
+                Countdown = S.VidCountdown <= 0 ? 0 : S.VidCountdown <= 3 ? 3 : 5,
+            };
+            preRec = pre;
+            pre.CancelClicked += () => { preRec = null; frame.Close(); };
+            pre.StartClicked += () =>
+            {
+                preRec = null;
+                frame.Close();
+                S.RecMic = pre.MicOn; S.RecSys = pre.SysOn;
+                if (cams.Count > 0) { S.VidCam = pre.CamOn; if (pre.CamName != null) S.VidCamName = pre.CamName; }
+                S.VidCountdown = pre.Countdown;
+                S.Save();
+                BeginVideo(area, window);
+            };
+            frame.Show();
+            pre.Show();
+        }
+
+        PreRecBar preRec;
+
+        void BeginVideo(Rectangle area, IntPtr window)
         {
             // contagem regressiva (opcional) perto da área, depois começa
             if (S.VidCountdown > 0)

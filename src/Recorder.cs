@@ -165,6 +165,7 @@ namespace Capturo
         const int B = 3;
         bool paused;
         public bool Paused { get { return paused; } set { paused = value; Invalidate(); } }   // amarela enquanto pausado
+        public bool Armed;   // azul: área escolhida, ainda não está gravando
         public RecFrame(Rectangle area)
         {
             FormBorderStyle = FormBorderStyle.None;
@@ -192,7 +193,7 @@ namespace Capturo
         {
             var g = e.Graphics;
             g.Clear(Color.Magenta);
-            using (var br = new SolidBrush(paused ? Color.FromArgb(250, 200, 60) : Color.FromArgb(235, 30, 50)))
+            using (var br = new SolidBrush(Armed ? Art.PickBlue : paused ? Color.FromArgb(250, 200, 60) : Color.FromArgb(235, 30, 50)))
             {
                 g.FillRectangle(br, 0, 0, Width, B);
                 g.FillRectangle(br, 0, Height - B, Width, B);
@@ -270,8 +271,12 @@ namespace Capturo
         }
 
         // kind: 0 microfone, 1 som do computador, 2 webcam
-        void DrawToggle(Graphics g, Rectangle r, int kind, bool on, bool avail, bool hover, float level)
+        void DrawToggle(Graphics g, Rectangle r, int kind, bool on, bool avail, bool hover, float level) { DrawToggle(g, r, kind, on, avail, hover, level, k); }
+
+        // compartilhado com o painel de preparação (PreRecBar)
+        internal static void DrawToggle(Graphics g, Rectangle r, int kind, bool on, bool avail, bool hover, float level, float k)
         {
+            Func<float, int> D = v => (int)Math.Round(v * k);
             if (hover) Art.FillRound(g, Color.FromArgb(60, 60, 72), r, D(8));
             Color fg = !avail ? Color.FromArgb(80, 80, 90) : on ? Color.White : Color.FromArgb(130, 130, 140);
             float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f - D(1);
@@ -393,6 +398,217 @@ namespace Capturo
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             font.Dispose(); fontB.Dispose(); tip.Dispose();
+            base.OnFormClosed(e);
+        }
+    }
+
+    // Painel que aparece depois de escolher a área do vídeo e antes da contagem:
+    // liga/desliga microfone, som do computador e webcam, escolhe a câmera e a contagem, e começa a gravar.
+    class PreRecBar : Form
+    {
+        public event Action StartClicked, CancelClicked;
+        readonly float k;
+        readonly Font font, fontB, fontS;
+        readonly System.Collections.Generic.List<string> cams;
+        readonly Rectangle micR, sysR, camR, camMoreR, countR, recR, cancelR;
+        int hot = -1;
+        bool done;
+        readonly ToolTip tip = new ToolTip();
+
+        public bool MicOn, SysOn, CamOn;
+        public string CamName;
+        public int Countdown;   // 0, 3 ou 5 s
+        public bool HasCam { get { return cams.Count > 0; } }
+
+        int D(float v) { return (int)Math.Round(v * k); }
+
+        public PreRecBar(Rectangle area, System.Collections.Generic.List<string> cams)
+        {
+            this.cams = cams ?? new System.Collections.Generic.List<string>();
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.Manual;
+            AutoScaleMode = AutoScaleMode.None;
+            ShowInTaskbar = false; TopMost = true; KeyPreview = true;
+            DoubleBuffered = true;
+            using (var g = CreateGraphics()) k = Math.Max(1f, g.DpiX / 96f);
+            font = new Font("Segoe UI", 13 * k, FontStyle.Regular, GraphicsUnit.Pixel);
+            fontB = new Font("Segoe UI Semibold", 13 * k, FontStyle.Regular, GraphicsUnit.Pixel);
+            fontS = new Font("Segoe UI", 12 * k, FontStyle.Regular, GraphicsUnit.Pixel);
+
+            // [mic][som][cam▾] | Contagem 3 s | ● Gravar  Cancelar
+            int x = D(10), y = D(9), ih = D(34);
+            micR = new Rectangle(x, y, D(36), ih); x += D(38);
+            sysR = new Rectangle(x, y, D(36), ih); x += D(38);
+            camR = new Rectangle(x, y, D(36), ih); x += D(36);
+            camMoreR = this.cams.Count > 1 ? new Rectangle(x, y, D(16), ih) : Rectangle.Empty;
+            x += this.cams.Count > 1 ? D(18) : D(2);
+            x += D(10);
+            countR = new Rectangle(x, y, D(118), ih); x += D(118) + D(12);
+            recR = new Rectangle(x, y, D(100), ih); x += D(100) + D(6);
+            cancelR = new Rectangle(x, y, D(82), ih); x += D(82) + D(10);
+            int w = x, h = D(52);
+
+            var mon = Screen.FromRectangle(area).WorkingArea;
+            int bx = Math.Max(mon.Left, Math.Min(area.Left + (area.Width - w) / 2, mon.Right - w));
+            int by = area.Bottom + D(12);
+            if (by + h > mon.Bottom) by = area.Top - h - D(12);
+            if (by < mon.Top) by = area.Bottom - h - D(24);   // área ocupa a tela toda: fica por dentro, embaixo
+            Bounds = new Rectangle(bx, by, w, h);
+            using (var path = Art.RoundRect(new RectangleF(0, 0, w, h), h / 2f)) Region = new Region(path);
+            Cursor = Cursors.Hand;
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            Native.ForceForeground(Handle);   // Enter grava, Esc cancela
+        }
+
+        int HitAt(Point p)
+        {
+            if (micR.Contains(p)) return 0;
+            if (sysR.Contains(p)) return 1;
+            if (camR.Contains(p)) return 2;
+            if (!camMoreR.IsEmpty && camMoreR.Contains(p)) return 3;
+            if (countR.Contains(p)) return 4;
+            if (recR.Contains(p)) return 5;
+            if (cancelR.Contains(p)) return 6;
+            return -1;
+        }
+
+        string Tip(int h)
+        {
+            switch (h)
+            {
+                case 0: return MicOn ? "Microfone ligado (clique para não gravar)" : "Microfone desligado (clique para gravar)";
+                case 1: return SysOn ? "Som do computador ligado (clique para não gravar)" : "Som do computador desligado (clique para gravar)";
+                case 2: return !HasCam ? "Nenhuma webcam encontrada" : CamOn ? "Webcam ligada: " + CamName + " (clique para não gravar)" : "Webcam desligada (clique para gravar)";
+                case 3: return "Escolher a webcam";
+                case 4: return "Contagem antes de começar (clique para mudar)";
+                case 5: return "Começar a gravar (Enter)";
+                case 6: return "Cancelar (Esc)";
+            }
+            return "";
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+            g.Clear(Color.FromArgb(24, 24, 30));
+
+            RecBar.DrawToggle(g, micR, 0, MicOn, true, hot == 0, 0, k);
+            RecBar.DrawToggle(g, sysR, 1, SysOn, true, hot == 1, 0, k);
+            RecBar.DrawToggle(g, camR, 2, CamOn && HasCam, HasCam, hot == 2 && HasCam, 0, k);
+            if (!camMoreR.IsEmpty)
+            {
+                if (hot == 3) Art.FillRound(g, Color.FromArgb(60, 60, 72), camMoreR, D(6));
+                float cx = camMoreR.X + camMoreR.Width / 2f, cy = camMoreR.Y + camMoreR.Height / 2f;
+                using (var pen = new Pen(Color.FromArgb(190, 190, 200), D(1.6f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                    g.DrawLines(pen, new[] { new PointF(cx - D(3.5f), cy - D(1.5f)), new PointF(cx, cy + D(2)), new PointF(cx + D(3.5f), cy - D(1.5f)) });
+            }
+
+            // separador
+            using (var sep = new Pen(Color.FromArgb(60, 60, 70), 1))
+                g.DrawLine(sep, countR.X - D(6), D(14), countR.X - D(6), Height - D(14));
+
+            // contagem: ícone de cronômetro + texto
+            if (hot == 4) Art.FillRound(g, Color.FromArgb(60, 60, 72), countR, D(8));
+            float tx = countR.X + D(16), ty = countR.Y + countR.Height / 2f + D(1);
+            using (var pen = new Pen(Color.White, D(1.6f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            {
+                g.DrawEllipse(pen, tx - D(6.5f), ty - D(6.5f), D(13), D(13));
+                g.DrawLine(pen, tx, ty, tx, ty - D(4));
+                g.DrawLine(pen, tx - D(2.5f), ty - D(9.5f), tx + D(2.5f), ty - D(9.5f));
+            }
+            using (var sf = new StringFormat { LineAlignment = StringAlignment.Center })
+            using (var br = new SolidBrush(Color.FromArgb(225, 225, 232)))
+                g.DrawString(Countdown <= 0 ? "Sem contagem" : "Contagem: " + Countdown + " s", fontS, br,
+                    new RectangleF(countR.X + D(28), countR.Y, countR.Width - D(28), countR.Height), sf);
+
+            DrawBtn(g, recR, "●  Gravar", hot == 5, Color.FromArgb(235, 30, 50), fontB);
+            DrawBtn(g, cancelR, "Cancelar", hot == 6, Color.FromArgb(70, 70, 80), font);
+        }
+
+        void DrawBtn(Graphics g, Rectangle r, string text, bool hover, Color bg, Font f)
+        {
+            Art.FillRound(g, hover ? ControlPaint.Light(bg, 0.25f) : bg, r, r.Height / 2f);
+            using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+                g.DrawString(text, f, Brushes.White, r, sf);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            int h = HitAt(e.Location);
+            if (h != hot) { hot = h; Invalidate(); tip.SetToolTip(this, Tip(h)); }
+        }
+
+        protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hot = -1; Invalidate(); }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            if (e.Button != MouseButtons.Left) return;
+            switch (HitAt(e.Location))
+            {
+                case 0: MicOn = !MicOn; break;
+                case 1: SysOn = !SysOn; break;
+                case 2:
+                    if (!HasCam) return;
+                    CamOn = !CamOn;
+                    if (CamOn && (string.IsNullOrEmpty(CamName) || !cams.Contains(CamName))) CamName = cams[0];
+                    break;
+                case 3: ShowCamMenu(); return;
+                case 4: Countdown = Countdown <= 0 ? 3 : Countdown <= 3 ? 5 : 0; break;
+                case 5: Finish(true); return;
+                case 6: Finish(false); return;
+                default: return;
+            }
+            tip.SetToolTip(this, Tip(hot));
+            Invalidate();
+        }
+
+        void ShowCamMenu()
+        {
+            var m = new ContextMenuStrip();
+            var off = new ToolStripMenuItem("Não gravar a webcam") { Checked = !CamOn };
+            off.Click += (s, e) => { CamOn = false; Invalidate(); };
+            m.Items.Add(off);
+            m.Items.Add(new ToolStripSeparator());
+            foreach (var c in cams)
+            {
+                string name = c;
+                var it = new ToolStripMenuItem(name) { Checked = CamOn && name == CamName };
+                it.Click += (s, e) => { CamOn = true; CamName = name; Invalidate(); };
+                m.Items.Add(it);
+            }
+            m.Closed += (s, e) => BeginInvoke((Action)(() => m.Dispose()));
+            m.Show(this, new Point(camR.X, Height));
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (e.KeyCode == Keys.Enter) { e.Handled = true; Finish(true); }
+            else if (e.KeyCode == Keys.Escape) { e.Handled = true; Finish(false); }
+        }
+
+        void Finish(bool start)
+        {
+            if (done) return;
+            done = true;
+            Close();
+            var h = start ? StartClicked : CancelClicked;
+            if (h != null) h();
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            // fechou sem escolher (Alt+F4 etc.): conta como cancelar
+            if (!done) { done = true; if (CancelClicked != null) CancelClicked(); }
+            font.Dispose(); fontB.Dispose(); fontS.Dispose(); tip.Dispose();
             base.OnFormClosed(e);
         }
     }
