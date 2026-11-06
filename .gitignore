@@ -1,3 +1,12 @@
 dist/
 test/*.png
 *.bak
+test/artifacts/
+# projeto do vídeo: caches e capturas brutas
+video/.hyperframes/
+video/.waveform-cache/
+video/.thumbnails/
+video/.media/
+video/node_modules/
+video/capture/rec/
+video/capture/*.exe

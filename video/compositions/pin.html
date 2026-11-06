@@ -1,0 +1,104 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; background: var(--ground, #EEF1F5); font-family: "Inter", sans-serif; overflow: hidden; }
+    #pn-editor { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; clip-path: circle(0px at 1214px 588px); }
+    #pn-stage { position: absolute; inset: 0; }
+    #pn-win { position: absolute; left: 300px; top: 70px; width: 1320px; height: 940px; background: #fff; border-radius: 18px;
+      box-shadow: 0 24px 60px rgba(20, 24, 40, .18); overflow: hidden; transform-origin: 50% 60%; }
+    .c-head { height: 104px; border-bottom: 1px solid #E3E6EC; display: flex; align-items: center; gap: 22px; padding: 0 40px; }
+    .c-av { width: 62px; height: 62px; border-radius: 50%; background: #FFD9A8; color: #6B4310; font-weight: 700; font-size: 28px;
+      display: flex; align-items: center; justify-content: center; }
+    .c-name { font-size: 32px; font-weight: 700; color: #16161C; }
+    .c-sub { font-size: 28px; color: #6A7383; margin-top: 2px; }
+    .c-body { position: absolute; left: 0; right: 0; top: 104px; bottom: 112px; padding: 40px 48px; display: flex; flex-direction: column; gap: 22px; }
+    .b { max-width: 1000px; padding: 22px 30px; border-radius: 24px; font-size: 44px; line-height: 1.22; color: #16161C; }
+    .b.them { align-self: flex-start; background: #F1F2F6; border-bottom-left-radius: 8px; }
+    #pn-slot { align-self: flex-end; width: 716px; height: 292px; border-radius: 24px; border-bottom-right-radius: 8px; background: #16161C; flex: none; }
+    .c-input { position: absolute; left: 32px; right: 32px; bottom: 26px; height: 64px; border: 1px solid #DDE1E8; border-radius: 32px;
+      display: flex; align-items: center; padding: 0 30px; font-size: 28px; color: #6A7383; }
+    #pn-img { position: absolute; left: 866px; top: 452px; width: 696px; height: 272px; border-radius: 14px; }
+    #pn-pin { position: absolute; left: 1130px; top: 210px; width: 696px; height: 272px; opacity: 0;
+      box-shadow: 0 8px 28px rgba(20, 24, 40, .30); }
+    #pn-menu { position: absolute; left: 1065px; top: 400px; width: 535px; height: 288px; transform-origin: 100% 0%;
+      box-shadow: 0 10px 30px rgba(20, 24, 40, .25); opacity: 0; }
+    #pn-cursor { position: absolute; left: 2000px; top: 600px; width: 46px; height: 72px; }
+    #pn-title span, #pn-sub { opacity: 0; }
+    #pn-title { position: absolute; left: 110px; top: 720px; font-size: 120px; font-weight: 900; letter-spacing: -0.03em; color: #16161C; }
+    #pn-sub { position: absolute; left: 116px; top: 880px; font-size: 44px; font-weight: 700; color: #5A6170; }
+    #pn-keys { position: absolute; left: 0; right: 0; top: 820px; display: flex; justify-content: center; align-items: flex-end; gap: 26px; }
+    .pn-key { position: relative; width: 230px; height: 190px; }
+    .pn-key .base { position: absolute; inset: 0; border-radius: 28px; background: #C9CED8; }
+    .pn-key .cap { position: absolute; left: 0; top: 0; width: 100%; height: 180px; border-radius: 28px; background: #fff;
+      box-shadow: inset 0 -5px 0 #E6E9EF, 0 14px 40px rgba(20, 24, 40, .18); display: flex; align-items: center; justify-content: center;
+      font-size: 72px; font-weight: 900; letter-spacing: -0.02em; color: #16161C; }
+    .pn-plus { font-size: 90px; font-weight: 900; color: #16161C; padding-bottom: 40px; }
+  </style>
+  <div id="root" data-composition-id="pin" data-width="1920" data-height="1080">
+    <img id="pn-editor" src="assets/ui/editor.png" alt="">
+    <div id="pn-stage">
+      <div id="pn-win">
+        <div class="c-head">
+          <div class="c-av">MQ</div>
+          <div><div class="c-name">Marina · QA</div><div class="c-sub">online</div></div>
+        </div>
+        <div class="c-body">
+          <div class="b them">o checkout quebrou de novo</div>
+          <div class="b them">consegue mandar print de onde dá o erro?</div>
+          <div id="pn-slot"></div>
+          <div class="b them">achei! é o cupom vazio</div>
+        </div>
+        <div class="c-input">Mensagem</div>
+      </div>
+      <img id="pn-img" src="assets/ui/clip.png" alt="">
+      <img id="pn-pin" src="assets/ui/pin-flash.png" alt="">
+      <img id="pn-menu" src="assets/ui/pin-menu.png" alt="">
+      <div id="pn-title"><span id="pn-w1">Fica</span> <span id="pn-w2">por</span> <span id="pn-w3">cima</span> <span id="pn-w4">de</span> <span id="pn-w5">tudo.</span></div>
+      <div id="pn-sub">Ctrl+T liga e desliga</div>
+      <svg id="pn-cursor" viewBox="0 0 13 21"><path d="M0.6 0.6 L0.6 17 L4.4 13.3 L7.2 19.6 L9.8 18.6 L7.1 12.4 L12 12.4 Z" fill="#fff" stroke="#000" stroke-width="1" stroke-linejoin="round"/></svg>
+      <div id="pn-keys" data-layout-allow-overflow>
+        <div id="pn-k1" class="pn-key"><div class="base"></div><div id="pn-k1c" class="cap">Ctrl</div></div>
+        <div id="pn-plus" class="pn-plus">+</div>
+        <div id="pn-k2" class="pn-key" style="width: 190px;"><div class="base"></div><div id="pn-k2c" class="cap">T</div></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      // editor fica escondido até a imagem sair do chat
+
+      // Ctrl + T
+      tl.fromTo("#pn-k1", { y: 420 }, { y: 0, duration: 0.45, ease: "expo.out" }, 0.05);
+      tl.fromTo("#pn-plus", { opacity: 0 }, { opacity: 1, duration: 0.15, ease: "power2.out" }, 0.12);
+      tl.fromTo("#pn-k2", { y: 420 }, { y: 0, duration: 0.45, ease: "expo.out" }, 0.12);
+      tl.fromTo(["#pn-k1c", "#pn-k2c"], { y: 0 }, { y: 10, duration: 0.133, ease: "power2.in" }, 0.48);
+      tl.to(["#pn-k1c", "#pn-k2c"], { y: 0, duration: 0.2, ease: "power2.out" }, 0.62);
+      tl.to(["#pn-k1", "#pn-k2"], { y: 420, duration: 0.3, ease: "power3.in" }, 0.85);
+      tl.to("#pn-plus", { opacity: 0, duration: 0.15, ease: "power2.in" }, 0.85);
+
+      // a imagem sai do chat e o editor aparece por trás
+      tl.fromTo("#pn-editor", { clipPath: "circle(0px at 1214px 588px)" }, { clipPath: "circle(2400px at 1214px 588px)", duration: 0.6, ease: "power2.inOut" }, 0.7);
+      tl.to("#pn-win", { scale: 0.9, y: 90, opacity: 0, filter: "blur(10px)", duration: 0.45, ease: "power3.in" }, 0.68);
+      tl.to("#pn-img", { x: 1130 - 866, y: 210 - 452, borderRadius: 0, boxShadow: "0 8px 28px rgba(20,24,40,.30)", duration: 0.7, ease: "power3.inOut" }, 0.7);
+      // pousa como a janela fixada real
+      tl.set("#pn-pin", { opacity: 1 }, 1.4);
+      tl.set("#pn-img", { opacity: 0 }, 1.4);
+
+      // título
+      ["#pn-w1", "#pn-w2", "#pn-w3", "#pn-w4", "#pn-w5"].forEach(function (s, i) {
+        tl.fromTo(s, { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.13, ease: "power4.out" }, 1.5 + i * 0.067);
+      });
+      tl.fromTo("#pn-sub", { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.18, ease: "power4.out" }, 1.95);
+
+      // botão direito na imagem fixada: o menu real abre
+      tl.fromTo("#pn-cursor", { x: 0, y: 0 }, { x: -400, y: -200, duration: 0.5, ease: "power3.out" }, 1.42);
+      tl.fromTo("#pn-menu", { opacity: 0, scale: 0.96 }, { opacity: 1, scale: 1, duration: 0.12, ease: "power2.out" }, 1.93);
+      tl.to("#pn-cursor", { x: -750, y: -80, duration: 0.45, ease: "power2.inOut" }, 2.3);
+
+      // sai com blur no mesmo chão
+      tl.to("#pn-stage", { opacity: 0, filter: "blur(10px)", duration: 0.2, ease: "power3.in" }, 3.78);
+      tl.to("#pn-editor", { opacity: 0, filter: "blur(10px)", duration: 0.2, ease: "power3.in" }, 3.78);
+      window.__timelines["pin"] = tl;
+    })();
+  </script>
+</template>

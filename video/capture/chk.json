@@ -1,0 +1,546 @@
+[INFO] [Compiler] Fetched 11 font face(s) for "Inter" from Google Fonts (cached to C:\Users\Kauã\.cache\hyperframes\fonts\inter)
+[INFO] [Compiler] Injected deterministic @font-face rules for 1 requested font families
+[hyperframes] check: samples 1/9
+[hyperframes] check: samples 2/9
+[hyperframes] check: samples 3/9
+[hyperframes] check: samples 4/9
+[hyperframes] check: samples 5/9
+[hyperframes] check: samples 6/9
+[hyperframes] check: samples 7/9
+[hyperframes] check: samples 8/9
+[hyperframes] check: samples 9/9
+[hyperframes] check: craft 1/248
+[hyperframes] check: craft 2/248
+[hyperframes] check: craft 3/248
+[hyperframes] check: craft 4/248
+[hyperframes] check: craft 5/248
+[hyperframes] check: craft 6/248
+[hyperframes] check: craft 7/248
+[hyperframes] check: craft 8/248
+[hyperframes] check: craft 9/248
+[hyperframes] check: craft 10/248
+[hyperframes] check: craft 11/248
+[hyperframes] check: craft 12/248
+[hyperframes] check: craft 13/248
+[hyperframes] check: craft 14/248
+[hyperframes] check: craft 15/248
+[hyperframes] check: craft 16/248
+[hyperframes] check: craft 17/248
+[hyperframes] check: craft 18/248
+[hyperframes] check: craft 19/248
+[hyperframes] check: craft 20/248
+[hyperframes] check: craft 21/248
+[hyperframes] check: craft 22/248
+[hyperframes] check: craft 23/248
+[hyperframes] check: craft 24/248
+[hyperframes] check: craft 25/248
+[hyperframes] check: craft 26/248
+[hyperframes] check: craft 27/248
+[hyperframes] check: craft 28/248
+[hyperframes] check: craft 29/248
+[hyperframes] check: craft 30/248
+[hyperframes] check: craft 31/248
+[hyperframes] check: craft 32/248
+[hyperframes] check: craft 33/248
+[hyperframes] check: craft 34/248
+[hyperframes] check: craft 35/248
+[hyperframes] check: craft 36/248
+[hyperframes] check: craft 37/248
+[hyperframes] check: craft 38/248
+[hyperframes] check: craft 39/248
+[hyperframes] check: craft 40/248
+[hyperframes] check: craft 41/248
+[hyperframes] check: craft 42/248
+[hyperframes] check: craft 43/248
+[hyperframes] check: craft 44/248
+[hyperframes] check: craft 45/248
+[hyperframes] check: craft 46/248
+[hyperframes] check: craft 47/248
+[hyperframes] check: craft 48/248
+[hyperframes] check: craft 49/248
+[hyperframes] check: craft 50/248
+[hyperframes] check: craft 51/248
+[hyperframes] check: craft 52/248
+[hyperframes] check: craft 53/248
+[hyperframes] check: craft 54/248
+[hyperframes] check: craft 55/248
+[hyperframes] check: craft 56/248
+[hyperframes] check: craft 57/248
+[hyperframes] check: craft 58/248
+[hyperframes] check: craft 59/248
+[hyperframes] check: craft 60/248
+[hyperframes] check: craft 61/248
+[hyperframes] check: craft 62/248
+[hyperframes] check: craft 63/248
+[hyperframes] check: craft 64/248
+[hyperframes] check: craft 65/248
+[hyperframes] check: craft 66/248
+[hyperframes] check: craft 67/248
+[hyperframes] check: craft 68/248
+[hyperframes] check: craft 69/248
+[hyperframes] check: craft 70/248
+[hyperframes] check: craft 71/248
+[hyperframes] check: craft 72/248
+[hyperframes] check: craft 73/248
+[hyperframes] check: craft 74/248
+[hyperframes] check: craft 75/248
+[hyperframes] check: craft 76/248
+[hyperframes] check: craft 77/248
+[hyperframes] check: craft 78/248
+[hyperframes] check: craft 79/248
+[hyperframes] check: craft 80/248
+[hyperframes] check: craft 81/248
+[hyperframes] check: craft 82/248
+[hyperframes] check: craft 83/248
+[hyperframes] check: craft 84/248
+[hyperframes] check: craft 85/248
+[hyperframes] check: craft 86/248
+[hyperframes] check: craft 87/248
+[hyperframes] check: craft 88/248
+[hyperframes] check: craft 89/248
+[hyperframes] check: craft 90/248
+[hyperframes] check: craft 91/248
+[hyperframes] check: craft 92/248
+[hyperframes] check: craft 93/248
+[hyperframes] check: craft 94/248
+[hyperframes] check: craft 95/248
+[hyperframes] check: craft 96/248
+[hyperframes] check: craft 97/248
+[hyperframes] check: craft 98/248
+[hyperframes] check: craft 99/248
+[hyperframes] check: craft 100/248
+[hyperframes] check: craft 101/248
+[hyperframes] check: craft 102/248
+[hyperframes] check: craft 103/248
+[hyperframes] check: craft 104/248
+[hyperframes] check: craft 105/248
+[hyperframes] check: craft 106/248
+[hyperframes] check: craft 107/248
+[hyperframes] check: craft 108/248
+[hyperframes] check: craft 109/248
+[hyperframes] check: craft 110/248
+[hyperframes] check: craft 111/248
+[hyperframes] check: craft 112/248
+[hyperframes] check: craft 113/248
+[hyperframes] check: craft 114/248
+[hyperframes] check: craft 115/248
+[hyperframes] check: craft 116/248
+[hyperframes] check: craft 117/248
+[hyperframes] check: craft 118/248
+[hyperframes] check: craft 119/248
+[hyperframes] check: craft 120/248
+[hyperframes] check: craft 121/248
+[hyperframes] check: craft 122/248
+[hyperframes] check: craft 123/248
+[hyperframes] check: craft 124/248
+[hyperframes] check: craft 125/248
+[hyperframes] check: craft 126/248
+[hyperframes] check: craft 127/248
+[hyperframes] check: craft 128/248
+[hyperframes] check: craft 129/248
+[hyperframes] check: craft 130/248
+[hyperframes] check: craft 131/248
+[hyperframes] check: craft 132/248
+[hyperframes] check: craft 133/248
+[hyperframes] check: craft 134/248
+[hyperframes] check: craft 135/248
+[hyperframes] check: craft 136/248
+[hyperframes] check: craft 137/248
+[hyperframes] check: craft 138/248
+[hyperframes] check: craft 139/248
+[hyperframes] check: craft 140/248
+[hyperframes] check: craft 141/248
+[hyperframes] check: craft 142/248
+[hyperframes] check: craft 143/248
+[hyperframes] check: craft 144/248
+[hyperframes] check: craft 145/248
+[hyperframes] check: craft 146/248
+[hyperframes] check: craft 147/248
+[hyperframes] check: craft 148/248
+[hyperframes] check: craft 149/248
+[hyperframes] check: craft 150/248
+[hyperframes] check: craft 151/248
+[hyperframes] check: craft 152/248
+[hyperframes] check: craft 153/248
+[hyperframes] check: craft 154/248
+[hyperframes] check: craft 155/248
+[hyperframes] check: craft 156/248
+[hyperframes] check: craft 157/248
+[hyperframes] check: craft 158/248
+[hyperframes] check: craft 159/248
+[hyperframes] check: craft 160/248
+[hyperframes] check: craft 161/248
+[hyperframes] check: craft 162/248
+[hyperframes] check: craft 163/248
+[hyperframes] check: craft 164/248
+[hyperframes] check: craft 165/248
+[hyperframes] check: craft 166/248
+[hyperframes] check: craft 167/248
+[hyperframes] check: craft 168/248
+[hyperframes] check: craft 169/248
+[hyperframes] check: craft 170/248
+[hyperframes] check: craft 171/248
+[hyperframes] check: craft 172/248
+[hyperframes] check: craft 173/248
+[hyperframes] check: craft 174/248
+[hyperframes] check: craft 175/248
+[hyperframes] check: craft 176/248
+[hyperframes] check: craft 177/248
+[hyperframes] check: craft 178/248
+[hyperframes] check: craft 179/248
+[hyperframes] check: craft 180/248
+[hyperframes] check: craft 181/248
+[hyperframes] check: craft 182/248
+[hyperframes] check: craft 183/248
+[hyperframes] check: craft 184/248
+[hyperframes] check: craft 185/248
+[hyperframes] check: craft 186/248
+[hyperframes] check: craft 187/248
+[hyperframes] check: craft 188/248
+[hyperframes] check: craft 189/248
+[hyperframes] check: craft 190/248
+[hyperframes] check: craft 191/248
+[hyperframes] check: craft 192/248
+[hyperframes] check: craft 193/248
+[hyperframes] check: craft 194/248
+[hyperframes] check: craft 195/248
+[hyperframes] check: craft 196/248
+[hyperframes] check: craft 197/248
+[hyperframes] check: craft 198/248
+[hyperframes] check: craft 199/248
+[hyperframes] check: craft 200/248
+[hyperframes] check: craft 201/248
+[hyperframes] check: craft 202/248
+[hyperframes] check: craft 203/248
+[hyperframes] check: craft 204/248
+[hyperframes] check: craft 205/248
+[hyperframes] check: craft 206/248
+[hyperframes] check: craft 207/248
+[hyperframes] check: craft 208/248
+[hyperframes] check: craft 209/248
+[hyperframes] check: craft 210/248
+[hyperframes] check: craft 211/248
+[hyperframes] check: craft 212/248
+[hyperframes] check: craft 213/248
+[hyperframes] check: craft 214/248
+[hyperframes] check: craft 215/248
+[hyperframes] check: craft 216/248
+[hyperframes] check: craft 217/248
+[hyperframes] check: craft 218/248
+[hyperframes] check: craft 219/248
+[hyperframes] check: craft 220/248
+[hyperframes] check: craft 221/248
+[hyperframes] check: craft 222/248
+[hyperframes] check: craft 223/248
+[hyperframes] check: craft 224/248
+[hyperframes] check: craft 225/248
+[hyperframes] check: craft 226/248
+[hyperframes] check: craft 227/248
+[hyperframes] check: craft 228/248
+[hyperframes] check: craft 229/248
+[hyperframes] check: craft 230/248
+[hyperframes] check: craft 231/248
+[hyperframes] check: craft 232/248
+[hyperframes] check: craft 233/248
+[hyperframes] check: craft 234/248
+[hyperframes] check: craft 235/248
+[hyperframes] check: craft 236/248
+[hyperframes] check: craft 237/248
+[hyperframes] check: craft 238/248
+[hyperframes] check: craft 239/248
+[hyperframes] check: craft 240/248
+[hyperframes] check: craft 241/248
+[hyperframes] check: craft 242/248
+[hyperframes] check: craft 243/248
+[hyperframes] check: craft 244/248
+[hyperframes] check: craft 245/248
+[hyperframes] check: craft 246/248
+[hyperframes] check: craft 247/248
+[hyperframes] check: craft 248/248
+[hyperframes] check: overlap 1/23
+[hyperframes] check: overlap 2/23
+[hyperframes] check: overlap 3/23
+[hyperframes] check: overlap 4/23
+[hyperframes] check: overlap 5/23
+[hyperframes] check: overlap 6/23
+[hyperframes] check: overlap 7/23
+[hyperframes] check: overlap 8/23
+[hyperframes] check: overlap 9/23
+[hyperframes] check: overlap 10/23
+[hyperframes] check: overlap 11/23
+[hyperframes] check: overlap 12/23
+[hyperframes] check: overlap 13/23
+[hyperframes] check: overlap 14/23
+[hyperframes] check: overlap 15/23
+[hyperframes] check: overlap 16/23
+[hyperframes] check: overlap 17/23
+[hyperframes] check: overlap 18/23
+[hyperframes] check: overlap 19/23
+[hyperframes] check: overlap 20/23
+[hyperframes] check: overlap 21/23
+[hyperframes] check: overlap 22/23
+[hyperframes] check: overlap 23/23
+[hyperframes] check: analyze 0/3
+[hyperframes] check: analyze 1/3
+[hyperframes] check: analyze 2/3
+{
+  "ok": true,
+  "strict": false,
+  "browserSkipped": false,
+  "lint": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": [],
+    "filesScanned": 9
+  },
+  "runtime": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": []
+  },
+  "layout": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 1,
+    "findings": [
+      {
+        "code": "canvas_covered",
+        "severity": "info",
+        "time": 8.611,
+        "selector": "#proof > div:nth-of-type(1)",
+        "message": "An opaque element covers the canvas above every other visible clip, so the frame shows only it.",
+        "rect": {
+          "left": 0,
+          "top": 0,
+          "right": 1920,
+          "bottom": 1080,
+          "width": 1920,
+          "height": 1080
+        },
+        "fixHint": "Move the full-frame element below the content (earlier in the DOM or a lower z-index / track), or mark a deliberate full-frame card with data-layout-allow-occlusion.",
+        "dataAttributes": {
+          "data-hf-inner-root": "true",
+          "data-hf-authored-id": "root",
+          "data-width": "1920",
+          "data-height": "1080"
+        },
+        "sourceFile": "compositions/proof.html",
+        "bbox": {
+          "x": 0,
+          "y": 0,
+          "width": 1920,
+          "height": 1080
+        },
+        "firstSeen": 8.611,
+        "lastSeen": 8.611,
+        "occurrences": 1,
+        "heldMs": 0,
+        "times": [
+          8.611
+        ]
+      }
+    ],
+    "duration": 31,
+    "samples": [
+      1.722,
+      5.167,
+      8.611,
+      12.056,
+      15.5,
+      18.944,
+      22.389,
+      25.833,
+      29.278
+    ],
+    "transitionSamples": [],
+    "transitionSamplesDropped": 0,
+    "tolerance": 2,
+    "totalIssueCount": 1,
+    "truncated": false
+  },
+  "motion": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": [],
+    "enabled": false,
+    "samples": 0
+  },
+  "contrast": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": [],
+    "enabled": true,
+    "samples": [
+      1.722,
+      8.611,
+      15.5,
+      22.389,
+      29.278
+    ],
+    "checked": 19,
+    "passed": 19
+  },
+  "craft": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 6,
+    "infoCount": 0,
+    "findings": [
+      {
+        "code": "line_unread",
+        "severity": "warning",
+        "message": "\"Print da tela inteira.\" (4 words) is on screen 0.93 s (±0.01 s), under its 1.27 s floor: hold it about 0.5 s + 0.3 s a word (1.70 s here) before it leaves or changes; see references/motion.md.",
+        "text": "Print da tela inteira.",
+        "selector": "#ow-1-t",
+        "dataAttributes": {},
+        "sourceFile": "compositions/oldway.html",
+        "bbox": {
+          "x": 150,
+          "y": 366,
+          "width": 796.97,
+          "height": 334
+        },
+        "time": 3.07,
+        "words": 4,
+        "seconds": 0.93,
+        "floorSeconds": 1.275
+      },
+      {
+        "code": "line_unread",
+        "severity": "warning",
+        "message": "\"Abre um editor.\" (3 words) is on screen 0.93 s (±0.01 s), under its 1.05 s floor: hold it about 0.5 s + 0.3 s a word (1.40 s here) before it leaves or changes; see references/motion.md.",
+        "text": "Abre um editor.",
+        "selector": "#ow-2-t",
+        "dataAttributes": {},
+        "sourceFile": "compositions/oldway.html",
+        "bbox": {
+          "x": 339.73,
+          "y": 403,
+          "width": 1240.52,
+          "height": 206
+        },
+        "time": 4.07,
+        "words": 3,
+        "seconds": 0.93,
+        "floorSeconds": 1.05
+      },
+      {
+        "code": "line_unread",
+        "severity": "warning",
+        "message": "\"Recorta. Salva. Anexa.\" (3 words) is on screen 0.93 s (±0.01 s), under its 1.05 s floor: hold it about 0.5 s + 0.3 s a word (1.40 s here) before it leaves or changes; see references/motion.md.",
+        "text": "Recorta. Salva. Anexa.",
+        "selector": "#ow-3 > div:nth-of-type(1)",
+        "dataAttributes": {},
+        "sourceFile": "compositions/oldway.html",
+        "bbox": {
+          "x": 1157.58,
+          "y": 316,
+          "width": 612.4200000000001,
+          "height": 181
+        },
+        "time": 5.07,
+        "words": 3,
+        "seconds": 0.93,
+        "floorSeconds": 1.05
+      },
+      {
+        "code": "line_unread",
+        "severity": "warning",
+        "message": "\"o checkout quebrou de novo\" (5 words) is on screen 1.07 s (±0.01 s), under its 1.50 s floor: hold it about 0.5 s + 0.3 s a word (2.00 s here) before it leaves or changes; see references/motion.md.",
+        "text": "o checkout quebrou de novo",
+        "selector": "#pn-win > div:nth-of-type(2) > div:nth-of-type(1)",
+        "dataAttributes": {},
+        "sourceFile": "compositions/pin.html",
+        "bbox": {
+          "x": 378,
+          "y": 236,
+          "width": 514.67,
+          "height": 46
+        },
+        "time": 21.602,
+        "words": 5,
+        "seconds": 1.07,
+        "floorSeconds": 1.5
+      },
+      {
+        "code": "line_unread",
+        "severity": "warning",
+        "message": "\"consegue mandar print de onde dá o erro?\" (8 words) is on screen 1.07 s (±0.01 s), under its 2.17 s floor: hold it about 0.5 s + 0.3 s a word (2.90 s here) before it leaves or changes; see references/motion.md.",
+        "text": "consegue mandar print de onde dá o erro?",
+        "selector": "#pn-win > div:nth-of-type(2) > div:nth-of-type(2)",
+        "dataAttributes": {},
+        "sourceFile": "compositions/pin.html",
+        "bbox": {
+          "x": 378,
+          "y": 349.5,
+          "width": 766.3299999999999,
+          "height": 46
+        },
+        "time": 21.602,
+        "words": 8,
+        "seconds": 1.07,
+        "floorSeconds": 2.175
+      },
+      {
+        "code": "line_unread",
+        "severity": "warning",
+        "message": "\"achei! é o cupom vazio\" (5 words) is on screen 1.07 s (±0.01 s), under its 1.50 s floor: hold it about 0.5 s + 0.3 s a word (2.00 s here) before it leaves or changes; see references/motion.md.",
+        "text": "achei! é o cupom vazio",
+        "selector": "#pn-win > div:nth-of-type(2) > div:nth-of-type(4)",
+        "dataAttributes": {},
+        "sourceFile": "compositions/pin.html",
+        "bbox": {
+          "x": 378,
+          "y": 777,
+          "width": 414.5,
+          "height": 46
+        },
+        "time": 21.602,
+        "words": 5,
+        "seconds": 1.07,
+        "floorSeconds": 1.5
+      }
+    ],
+    "enabled": true,
+    "step": 0.125,
+    "samples": 248
+  },
+  "audio": {
+    "ok": true,
+    "errorCount": 0,
+    "warningCount": 0,
+    "infoCount": 0,
+    "findings": []
+  },
+  "hdr": {
+    "autoPromotion": null,
+    "inspection": "available"
+  },
+  "snapshots": {
+    "enabled": false,
+    "files": [],
+    "times": [],
+    "findingFiles": []
+  },
+  "saved": {
+    "id": "a9a6ecec-b7a1-4a14-b19d-fa38661495bb",
+    "revision": null,
+    "report": "C:\\Users\\Kauã\\.t3\\scratch\\2026-11-04-quero-uma-ferramenta-para-fazer-f49714af\\video\\.hyperframes\\artifacts\\checks\\a9a6ecec-b7a1-4a14-b19d-fa38661495bb.json",
+    "attribution": "inputs-changed"
+  },
+  "_meta": {
+    "version": "0.9.13",
+    "latestVersion": "0.9.13",
+    "updateAvailable": false,
+    "checkedAt": "2026-11-04T22:09:16.773Z"
+  }
+}

@@ -1,0 +1,56 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; background: var(--ground, #EEF1F5); font-family: "Inter", sans-serif; overflow: hidden; }
+    #po-shot { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; }
+    #po-ground { position: absolute; inset: 0; background: var(--ground, #EEF1F5); }
+    #po-win { position: absolute; left: 300px; top: 70px; width: 1320px; height: 940px; background: #fff; border-radius: 18px;
+      box-shadow: 0 24px 60px rgba(20, 24, 40, .18); overflow: hidden; }
+    .c-head { height: 104px; border-bottom: 1px solid #E3E6EC; display: flex; align-items: center; gap: 22px; padding: 0 40px; }
+    .c-av { width: 62px; height: 62px; border-radius: 50%; background: #FFD9A8; color: #6B4310; font-weight: 700; font-size: 28px;
+      display: flex; align-items: center; justify-content: center; }
+    .c-name { font-size: 32px; font-weight: 700; color: #16161C; }
+    .c-sub { font-size: 28px; color: #6A7383; margin-top: 2px; }
+    .c-body { position: absolute; left: 0; right: 0; top: 104px; bottom: 112px; padding: 40px 48px; display: flex; flex-direction: column; gap: 22px; }
+    .b { max-width: 1000px; padding: 22px 30px; border-radius: 24px; font-size: 44px; line-height: 1.22; color: #16161C; }
+    .b.them { align-self: flex-start; background: #F1F2F6; border-bottom-left-radius: 8px; }
+    #po-slot { align-self: flex-end; width: 716px; height: 292px; border-radius: 24px; border-bottom-right-radius: 8px; background: #16161C; flex: none; }
+    .c-input { position: absolute; left: 32px; right: 32px; bottom: 26px; height: 64px; border: 1px solid #DDE1E8; border-radius: 32px;
+      display: flex; align-items: center; padding: 0 30px; font-size: 28px; color: #6A7383; }
+    #po-img { position: absolute; left: 1150px; top: 440px; width: 696px; height: 272px; border-radius: 0; transform-origin: 50% 50%; }
+  </style>
+  <div id="root" data-composition-id="payoff" data-width="1920" data-height="1080">
+    <img id="po-shot" src="assets/ui/rec-last.png" alt="">
+    <div id="po-ground"></div>
+    <div id="po-win">
+      <div class="c-head">
+        <div class="c-av">MQ</div>
+        <div><div class="c-name">Marina · QA</div><div class="c-sub">online</div></div>
+      </div>
+      <div class="c-body">
+        <div class="b them">o checkout quebrou de novo</div>
+        <div class="b them">consegue mandar print de onde dá o erro?</div>
+        <div id="po-slot"></div>
+        <div id="po-r1" class="b them">achei! é o cupom vazio</div>
+      </div>
+      <div class="c-input">Mensagem</div>
+    </div>
+    <img id="po-img" src="assets/ui/clip.png" alt="">
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      // a imagem copiada se solta da tela
+      tl.fromTo("#po-img", { scale: 1, boxShadow: "0 0 0 rgba(20,24,40,0)" }, { scale: 1.03, boxShadow: "0 30px 70px rgba(20,24,40,.35)", duration: 0.25, ease: "power2.out" }, 0);
+      // o desktop claro abre a partir da imagem
+      tl.fromTo("#po-ground", { clipPath: "circle(0px at 1498px 576px)" }, { clipPath: "circle(2300px at 1498px 576px)", duration: 0.5, ease: "power2.inOut" }, 0.18);
+      // o chat se monta em volta
+      tl.fromTo("#po-win", { opacity: 0, scale: 0.94 }, { opacity: 1, scale: 1, duration: 0.6, ease: "expo.out" }, 0.4);
+      tl.fromTo("#po-slot", { opacity: 0 }, { opacity: 1, duration: 0.2, ease: "power2.out" }, 0.85);
+      // voa para o balão enviado (carry across)
+      tl.to("#po-img", { x: 866 - 1150, y: 452 - 440, scale: 1, borderRadius: 14, boxShadow: "0 0 0 rgba(20,24,40,0)", duration: 0.75, ease: "power3.inOut" }, 0.3);
+      // resposta
+      tl.fromTo("#po-r1", { opacity: 0, scale: 0.92, transformOrigin: "0% 100%" }, { opacity: 1, scale: 1, duration: 0.45, ease: "expo.out" }, 1.8);
+      window.__timelines["payoff"] = tl;
+    })();
+  </script>
+</template>

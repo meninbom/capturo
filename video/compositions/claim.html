@@ -1,0 +1,25 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; background: var(--ground, #EEF1F5); font-family: "Inter", sans-serif; overflow: hidden; }
+    #cl-text { position: absolute; left: 0; right: 0; top: 330px; text-align: center; font-weight: 900; letter-spacing: -0.035em; color: #16161C; line-height: 1.05; }
+    #cl-l1 { font-size: 170px; }
+    #cl-l2 { font-size: 170px; }
+    .cl-acc { color: var(--accent, #7C4DFF); }
+  </style>
+  <div id="root" data-composition-id="claim" data-width="1920" data-height="1080">
+    <div id="cl-text">
+      <div id="cl-l1"><span id="cl-w1">Uma</span> <span id="cl-w2">tecla.</span></div>
+      <div id="cl-l2"><span id="cl-w3">Marcou,</span> <span id="cl-w4" class="cl-acc">mandou.</span></div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      [["#cl-w1", 0.12], ["#cl-w2", 0.19], ["#cl-w3", 0.62], ["#cl-w4", 0.75]].forEach(function (w) {
+        tl.fromTo(w[0], { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.13, ease: "power4.out" }, w[1]);
+      });
+      tl.to("#cl-text", { opacity: 0, filter: "blur(8px)", duration: 0.18, ease: "power3.in" }, 1.8);
+      window.__timelines["claim"] = tl;
+    })();
+  </script>
+</template>

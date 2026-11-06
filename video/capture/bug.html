@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; }
+  body { font-family: "Segoe UI", Inter, sans-serif; background: #eef1f5; color: #1d2330; }
+  .top { height: 72px; background: #fff; border-bottom: 1px solid #dde2ea; display: flex; align-items: center; padding: 0 64px; gap: 40px; }
+  .logo { font-weight: 800; font-size: 26px; letter-spacing: -0.02em; color: #0f7b5f; }
+  .nav { display: flex; gap: 28px; font-size: 17px; color: #5a6475; }
+  .crumbs { padding: 34px 64px 0; font-size: 16px; color: #7a8394; }
+  h1 { padding: 10px 64px 26px; font-size: 40px; font-weight: 700; letter-spacing: -0.02em; }
+  .wrap { display: flex; gap: 36px; padding: 0 64px; }
+  .card { background: #fff; border: 1px solid #dde2ea; border-radius: 14px; padding: 30px 34px; }
+  .items { flex: 1.5; }
+  .row { display: flex; align-items: center; gap: 22px; padding: 20px 0; border-bottom: 1px solid #eef1f5; }
+  .thumb { width: 84px; height: 84px; border-radius: 10px; }
+  .row .t { flex: 1; font-size: 20px; font-weight: 600; }
+  .row .t small { display: block; font-weight: 400; font-size: 15px; color: #7a8394; margin-top: 4px; }
+  .row .q { font-size: 17px; color: #5a6475; width: 90px; }
+  .row .p { font-size: 20px; font-weight: 600; width: 130px; text-align: right; }
+  .sum { flex: 1; height: fit-content; }
+  .sum h2 { font-size: 24px; margin-bottom: 18px; }
+  .line { display: flex; justify-content: space-between; font-size: 18px; color: #4b5566; padding: 9px 0; }
+  .total { display: flex; justify-content: space-between; font-size: 26px; font-weight: 700; padding: 18px 0 8px; border-top: 1px solid #dde2ea; margin-top: 10px; }
+  .total .bad { color: #1d2330; }
+  .coupon { margin: 18px 0; display: flex; gap: 10px; }
+  .coupon input { flex: 1; height: 50px; border: 1px solid #ccd3de; border-radius: 9px; padding: 0 16px; font-size: 17px; font-family: inherit; }
+  .coupon button { width: 120px; border: 1px solid #ccd3de; background: #f6f8fb; border-radius: 9px; font-size: 17px; font-family: inherit; }
+  .buy { position: relative; height: 62px; }
+  .buy button { position: absolute; left: 120px; top: 14px; width: 330px; height: 62px; border: 0; border-radius: 10px; background: #0f7b5f; color: #fff; font-size: 21px; font-weight: 700; font-family: inherit; transform: rotate(-4deg); }
+  .buy .ghost { position: absolute; left: 0; top: 0; width: 100%; height: 62px; border: 2px dashed #c9d0db; border-radius: 10px; }
+  .note { margin-top: 40px; font-size: 15px; color: #7a8394; }
+</style></head>
+<body>
+  <div class="top"><div class="logo">feirinha</div><div class="nav"><span>Início</span><span>Ofertas</span><span>Meus pedidos</span><span>Ajuda</span></div></div>
+  <div class="crumbs">Carrinho › Pagamento</div>
+  <h1>Finalizar pedido</h1>
+  <div class="wrap">
+    <div class="card items">
+      <div class="row"><div class="thumb" style="background:#f3c89b"></div><div class="t">Café torrado 500 g<small>Moagem média</small></div><div class="q">Qtd. 2</div><div class="p">R$ 59,80</div></div>
+      <div class="row"><div class="thumb" style="background:#b9d7c4"></div><div class="t">Caneca de cerâmica<small>Verde-musgo, 350 ml</small></div><div class="q">Qtd. 1</div><div class="p">R$ 42,00</div></div>
+      <div class="row" style="border-bottom:0"><div class="thumb" style="background:#c9c3e6"></div><div class="t">Filtro de papel nº 103<small>Caixa com 40</small></div><div class="q">Qtd. 3</div><div class="p">R$ 26,70</div></div>
+    </div>
+    <div class="card sum">
+      <h2>Resumo</h2>
+      <div class="line"><span>Subtotal</span><span>R$ 128,50</span></div>
+      <div class="line"><span>Frete</span><span>R$ 12,90</span></div>
+      <div class="line"><span>Desconto</span><span>— R$ 0,00</span></div>
+      <div class="total"><span>Total</span><span class="bad">R$ NaN</span></div>
+      <div class="coupon"><input placeholder="Cupom de desconto"><button>Aplicar</button></div>
+      <div class="buy"><div class="ghost"></div><button>Finalizar compra</button></div>
+      <div class="note">Pagamento seguro · entrega em até 3 dias úteis</div>
+    </div>
+  </div>
+</body></html>

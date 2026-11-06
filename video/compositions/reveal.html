@@ -1,0 +1,37 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; background: var(--ground, #EEF1F5); font-family: "Inter", sans-serif; overflow: hidden; }
+    #rv-or { position: absolute; left: 0; right: 0; top: 110px; text-align: center; font-size: 130px; font-weight: 900; letter-spacing: -0.03em; color: #16161C; }
+    #rv-icon { width: 120px; height: 120px; vertical-align: -16px; display: inline-block; }
+    .rv-acc { color: var(--accent, #7C4DFF); }
+    #rv-key { position: absolute; left: 660px; top: 380px; width: 600px; height: 520px; }
+    .rv-base { position: absolute; inset: 0; border-radius: 48px; background: #C9CED8; }
+    #rv-cap { position: absolute; left: 0; top: 0; width: 600px; height: 500px; border-radius: 48px; background: #fff;
+      box-shadow: inset 0 -6px 0 #E6E9EF; display: flex; flex-direction: column; justify-content: center; padding-left: 70px; }
+    .rv-l1 { font-size: 150px; font-weight: 900; letter-spacing: -0.03em; color: #16161C; line-height: 1; }
+    .rv-l2 { font-size: 56px; font-weight: 700; color: #8D93A1; margin-top: 18px; }
+    #rv-flash { position: absolute; inset: 0; background: #fff; opacity: 0; }
+  </style>
+  <div id="root" data-composition-id="reveal" data-width="1920" data-height="1080">
+    <div id="rv-or"><span id="rv-w1">Com o</span> <img id="rv-icon" src="assets/capturo-icon.png" alt=""> <span id="rv-w2" class="rv-acc">Capturo,</span> <span id="rv-w3">é só:</span></div>
+    <div id="rv-key">
+      <div class="rv-base"></div>
+      <div id="rv-cap"><div class="rv-l1">PrtScr</div><div class="rv-l2">SysRq</div></div>
+    </div>
+    <div id="rv-flash"></div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      ["#rv-w1", "#rv-icon", "#rv-w2", "#rv-w3"].forEach(function (s, i) {
+        tl.fromTo(s, { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.13, ease: "power4.out" }, 0.05 + i * 0.09);
+      });
+      tl.fromTo("#rv-key", { y: 760 }, { y: 0, duration: 0.7, ease: "expo.out" }, 0.45);
+      // a tecla afunda (4 frames) e volta (6 frames)
+      tl.fromTo("#rv-cap", { y: 0 }, { y: 18, duration: 0.133, ease: "power2.in" }, 2.3);
+      tl.to("#rv-cap", { y: 0, duration: 0.2, ease: "power2.out" }, 2.44);
+      tl.fromTo("#rv-flash", { opacity: 0 }, { opacity: 1, duration: 0.06, ease: "power2.in" }, 2.47);
+      window.__timelines["reveal"] = tl;
+    })();
+  </script>
+</template>

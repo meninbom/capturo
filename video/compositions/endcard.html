@@ -1,0 +1,29 @@
+<template>
+  <style>
+    #root { position: absolute; inset: 0; background: var(--ground, #EEF1F5); font-family: "Inter", sans-serif; overflow: hidden; }
+    #ec-lock { position: absolute; left: 0; right: 0; top: 380px; display: flex; justify-content: center; align-items: center; gap: 32px; }
+    #ec-icon { width: 140px; height: 140px; display: block; }
+    #ec-word { clip-path: inset(0% 100% 0% 0%); font-size: 116px; font-weight: 900; letter-spacing: -0.035em; color: #16161C; line-height: 1; }
+    #ec-line { position: absolute; left: 0; right: 0; top: 640px; text-align: center; font-size: 44px; font-weight: 700; color: #5A6170; opacity: 0; }
+  </style>
+  <div id="root" data-composition-id="endcard" data-width="1920" data-height="1080">
+    <div id="ec-lock">
+      <img id="ec-icon" src="assets/capturo-icon.png" alt="Capturo">
+      <div id="ec-word">Capturo</div>
+    </div>
+    <div id="ec-line">Windows · menos de 100 KB · sem instalação</div>
+  </div>
+  <script>
+    (function () {
+      const tl = gsap.timeline({ paused: true });
+      // o ícone cai como uma tecla e afunda
+      tl.fromTo("#ec-icon", { y: -440 }, { y: 0, duration: 0.5, ease: "power3.in" }, 0.02);
+      tl.to("#ec-icon", { scaleY: 0.9, scaleX: 1.05, transformOrigin: "50% 100%", duration: 0.1, ease: "power2.out" }, 0.52);
+      tl.to("#ec-icon", { scaleY: 1, scaleX: 1, duration: 0.25, ease: "power2.out" }, 0.62);
+      // nome entra por wipe
+      tl.fromTo("#ec-word", { clipPath: "inset(0% 100% 0% 0%)" }, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.5, ease: "power3.out" }, 0.68);
+      tl.fromTo("#ec-line", { opacity: 0, filter: "blur(6px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.2, ease: "power4.out" }, 1.2);
+      window.__timelines["endcard"] = tl;
+    })();
+  </script>
+</template>

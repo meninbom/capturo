@@ -1,4 +1,4 @@
-// Capturo - ferramenta de captura de tela no estilo Lightshot.
+﻿// Capturo - ferramenta de captura de tela no estilo Lightshot.
 // Compila com o csc.exe do .NET Framework 4.x (C# 5), sem dependências externas.
 using System;
 using System.Collections.Generic;
@@ -39,6 +39,52 @@ namespace Capturo
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr pid);
         [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
         [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+
+        // detecção de janelas sob o cursor
+        public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+        [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc fn, IntPtr lParam);
+        [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+        [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+        [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+        [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr hWnd, int index);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder sb, int max);
+        [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out RECT r, int size);
+        [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out int v, int size);
+        [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+
+        // Retângulos das janelas visíveis, da frente para trás, em coordenadas de tela.
+        public static List<Rectangle> VisibleWindowRects(IntPtr skip)
+        {
+            List<IntPtr> handles;
+            return VisibleWindowRects(skip, out handles);
+        }
+
+        // handles: a janela de cada retângulo (IntPtr.Zero para os monitores, no fim da lista)
+        public static List<Rectangle> VisibleWindowRects(IntPtr skip, out List<IntPtr> handles)
+        {
+            var list = new List<Rectangle>();
+            var hs = new List<IntPtr>();
+            handles = hs;
+            var cls = new System.Text.StringBuilder(64);
+            EnumWindows((h, l) =>
+            {
+                if (h == skip || !IsWindowVisible(h) || IsIconic(h)) return true;
+                if ((GetWindowLong(h, -20) & 0x20) != 0) return true; // WS_EX_TRANSPARENT
+                int cloaked;
+                if (DwmGetWindowAttribute(h, 14, out cloaked, 4) == 0 && cloaked != 0) return true; // DWMWA_CLOAKED
+                cls.Length = 0; GetClassName(h, cls, cls.Capacity);
+                string c = cls.ToString();
+                if (c == "Progman" || c == "WorkerW") return true; // área de trabalho: cai no monitor
+                RECT r;
+                if (DwmGetWindowAttribute(h, 9, out r, Marshal.SizeOf(typeof(RECT))) != 0) // DWMWA_EXTENDED_FRAME_BOUNDS
+                    if (!GetWindowRect(h, out r)) return true;
+                var rect = Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
+                if (rect.Width >= 20 && rect.Height >= 20) { list.Add(rect); hs.Add(h); }
+                return true;
+            }, IntPtr.Zero);
+            foreach (var s in Screen.AllScreens) { list.Add(s.Bounds); hs.Add(IntPtr.Zero); }
+            return list;
+        }
 
         public static bool Down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
@@ -150,6 +196,18 @@ namespace Capturo
         public Hotkey CaptureKey = new Hotkey(0, 0x2C);              // Print Screen
         public Hotkey FullKey = new Hotkey(Hotkey.Shift, 0x2C);      // Shift + Print Screen
         public Hotkey PinKey = new Hotkey(Hotkey.Ctrl, 0x2C);        // Ctrl + Print Screen
+        public Hotkey RepeatKey = new Hotkey();                      // repetir a última área (sem atalho por padrão)
+        public bool KeepHistory = true;                              // guarda as capturas na galeria
+        public bool Frame = false;                                   // moldura com sombra na imagem final
+        public Rectangle LastArea = Rectangle.Empty;                 // última área capturada (coordenadas de tela)
+        // gravação de vídeo: áudio e as últimas escolhas do editor
+        public bool RecMic = false, RecSys = true;
+        public Hotkey VideoKey = new Hotkey();                       // gravar vídeo (sem atalho por padrão)
+        public int VidFps = 30, VidCountdown = 3, VidMaxMin = 10;    // gravação: fps, contagem antes (s), limite (min)
+        public bool VidOpenEditor = true;                            // ao parar, abre o editor (senão exporta direto)
+        public bool VidCam = false;                                  // gravar a webcam junto (dá para ligar na barra também)
+        public string VidCamName = "";                               // qual câmera (vazio: a primeira)
+        public string VidStyle = "";                                 // últimas escolhas do editor (zoom, cursor, fundo...)
 
         public const int MinIcon = 60, MaxIcon = 160;
 
@@ -183,6 +241,27 @@ namespace Capturo
                             case "CaptureKey": s.CaptureKey = Hotkey.Parse(v, s.CaptureKey); break;
                             case "FullKey": s.FullKey = Hotkey.Parse(v, s.FullKey); break;
                             case "PinKey": s.PinKey = Hotkey.Parse(v, s.PinKey); break;
+                            case "RepeatKey": s.RepeatKey = Hotkey.Parse(v, s.RepeatKey); break;
+                            case "KeepHistory": s.KeepHistory = v != "0"; break;
+                            case "Frame": s.Frame = v == "1"; break;
+                            case "RecMic": s.RecMic = v == "1"; break;
+                            case "RecSys": s.RecSys = v != "0"; break;
+                            case "VideoKey": s.VideoKey = Hotkey.Parse(v, s.VideoKey); break;
+                            case "VidFps": int vf; if (int.TryParse(v, out vf)) s.VidFps = vf >= 60 ? 60 : 30; break;
+                            case "VidCountdown": int vc; if (int.TryParse(v, out vc)) s.VidCountdown = Math.Max(0, Math.Min(10, vc)); break;
+                            case "VidMaxMin": int vm; if (int.TryParse(v, out vm)) s.VidMaxMin = Math.Max(1, Math.Min(15, vm)); break;
+                            case "VidOpenEditor": s.VidOpenEditor = v != "0"; break;
+                            case "VidCam": s.VidCam = v == "1"; break;
+                            case "VidCamName": s.VidCamName = v; break;
+                            case "VidStyle": s.VidStyle = v; break;
+                            case "LastArea":
+                                {
+                                    var a = v.Split(',');
+                                    int x, y, w, h;
+                                    if (a.Length == 4 && int.TryParse(a[0], out x) && int.TryParse(a[1], out y) && int.TryParse(a[2], out w) && int.TryParse(a[3], out h))
+                                        s.LastArea = new Rectangle(x, y, w, h);
+                                    break;
+                                }
                         }
                     }
                 }
@@ -207,6 +286,20 @@ namespace Capturo
                 sb.AppendLine("CaptureKey=" + CaptureKey.Serialize());
                 sb.AppendLine("FullKey=" + FullKey.Serialize());
                 sb.AppendLine("PinKey=" + PinKey.Serialize());
+                sb.AppendLine("RepeatKey=" + RepeatKey.Serialize());
+                sb.AppendLine("KeepHistory=" + (KeepHistory ? "1" : "0"));
+                sb.AppendLine("Frame=" + (Frame ? "1" : "0"));
+                sb.AppendLine("LastArea=" + LastArea.X + "," + LastArea.Y + "," + LastArea.Width + "," + LastArea.Height);
+                sb.AppendLine("RecMic=" + (RecMic ? "1" : "0"));
+                sb.AppendLine("RecSys=" + (RecSys ? "1" : "0"));
+                sb.AppendLine("VideoKey=" + VideoKey.Serialize());
+                sb.AppendLine("VidFps=" + VidFps);
+                sb.AppendLine("VidCountdown=" + VidCountdown);
+                sb.AppendLine("VidMaxMin=" + VidMaxMin);
+                sb.AppendLine("VidOpenEditor=" + (VidOpenEditor ? "1" : "0"));
+                sb.AppendLine("VidCam=" + (VidCam ? "1" : "0"));
+                sb.AppendLine("VidCamName=" + VidCamName);
+                sb.AppendLine("VidStyle=" + VidStyle);
                 File.WriteAllText(FilePath, sb.ToString(), Encoding.UTF8);
             }
             catch { }
@@ -448,6 +541,35 @@ namespace Capturo
             }
         }
 
+        public const int FramePad = 28;
+
+        // Moldura "de documentação": fundo claro, cantos arredondados e sombra suave.
+        public static Bitmap Framed(Bitmap src)
+        {
+            int pad = FramePad; float rad = 10;
+            var b = new Bitmap(src.Width + pad * 2, src.Height + pad * 2, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(b))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Color.FromArgb(235, 237, 242));
+                var r = new RectangleF(pad, pad, src.Width, src.Height);
+                for (int i = 8; i >= 1; i--)
+                {
+                    var sr = r; sr.Inflate(i * 1.5f, i * 1.5f); sr.Offset(0, 4);
+                    FillRound(g, Color.FromArgb(9, 0, 0, 0), sr, rad + i * 1.5f);
+                }
+                using (var path = RoundRect(r, rad))
+                using (var tb = new TextureBrush(src))
+                {
+                    tb.TranslateTransform(pad, pad);
+                    g.FillPath(tb, path);
+                }
+                using (var path = RoundRect(r, rad))
+                using (var pen = new Pen(Color.FromArgb(35, 0, 0, 0), 1)) g.DrawPath(pen, path);
+            }
+            return b;
+        }
+
         public static void DrawArrow(Graphics g, Color c, float w, PointF a, PointF b)
         {
             float dx = b.X - a.X, dy = b.Y - a.Y;
@@ -509,6 +631,53 @@ namespace Capturo
                         g.DrawArc(pen, cx - 6 * s, cy - 5 * s, 13 * s, 12 * s, 200, 250);
                         g.FillPolygon(br, new[] { P(-9, -3), P(-2, -3), P(-6, 3) });
                         break;
+                    case 9: // pixelar
+                        using (var rp = RoundRect(new RectangleF(cx - 8 * s, cy - 8 * s, 16 * s, 16 * s), 2f * s)) g.DrawPath(pen, rp);
+                        for (int i = 0; i < 3; i++)
+                            for (int j = 0; j < 3; j++)
+                                if ((i + j) % 2 == 0) g.FillRectangle(br, cx + (-6 + i * 4) * s, cy + (-6 + j * 4) * s, 4 * s, 4 * s);
+                        break;
+                    case 10: // numeração
+                        g.DrawEllipse(pen, cx - 8.5f * s, cy - 8.5f * s, 17 * s, 17 * s);
+                        g.DrawLines(pen, new[] { P(-2.5f, -2.5f), P(0.5f, -4.5f), P(0.5f, 4.5f) });
+                        break;
+                    case 11: // elipse
+                        g.DrawEllipse(pen, cx - 8.5f * s, cy - 6.5f * s, 17 * s, 13 * s);
+                        break;
+                    case 12: // destaque
+                        using (var db = new SolidBrush(Color.FromArgb(90, fg)))
+                        using (var rp = RoundRect(new RectangleF(cx - 9 * s, cy - 7.5f * s, 18 * s, 15 * s), 2f * s)) g.FillPath(db, rp);
+                        g.FillRectangle(Brushes.White, cx - 4 * s, cy - 3 * s, 8 * s, 6 * s);
+                        g.DrawRectangle(pen, cx - 4 * s, cy - 3 * s, 8 * s, 6 * s);
+                        break;
+                    case 13: // mover / editar (cursor)
+                        g.DrawPolygon(pen, new[] { P(-4.5f, -8), P(-4.5f, 6), P(-1, 2.8f), P(1.5f, 8), P(3.7f, 7), P(1.3f, 1.8f), P(6, 1.8f) });
+                        break;
+                    case 28: // gravar GIF
+                        g.DrawEllipse(pen, cx - 8.5f * s, cy - 8.5f * s, 17 * s, 17 * s);
+                        using (var rb = new SolidBrush(Color.FromArgb(235, 30, 50))) g.FillEllipse(rb, cx - 4 * s, cy - 4 * s, 8 * s, 8 * s);
+                        break;
+                    case 31: // gravar vídeo (câmera)
+                        using (var rp = RoundRect(new RectangleF(cx - 9 * s, cy - 6 * s, 13 * s, 12 * s), 2.5f * s)) g.DrawPath(pen, rp);
+                        g.DrawPolygon(pen, new[] { P(4, -2), P(9, -5), P(9, 5), P(4, 2) });
+                        using (var rb = new SolidBrush(Color.FromArgb(235, 30, 50))) g.FillEllipse(rb, cx - 5 * s, cy - 2.5f * s, 5 * s, 5 * s);
+                        break;
+                    case 29: // copiar texto (OCR)
+                        g.DrawLines(pen, new[] { P(-8, -4), P(-8, -8), P(-4, -8) });
+                        g.DrawLines(pen, new[] { P(4, -8), P(8, -8), P(8, -4) });
+                        g.DrawLines(pen, new[] { P(8, 4), P(8, 8), P(4, 8) });
+                        g.DrawLines(pen, new[] { P(-4, 8), P(-8, 8), P(-8, 4) });
+                        g.DrawLine(pen, P(-3.5f, -3.5f), P(3.5f, -3.5f));
+                        g.DrawLine(pen, P(0, -3.5f), P(0, 4));
+                        break;
+                    case 30: // moldura com sombra
+                        using (var sb2 = new SolidBrush(Color.FromArgb(70, fg))) g.FillRectangle(sb2, cx - 4.5f * s, cy - 1.5f * s, 11 * s, 8 * s);
+                        using (var rp = RoundRect(new RectangleF(cx - 7.5f * s, cy - 6.5f * s, 12 * s, 10 * s), 1.5f * s))
+                        {
+                            g.FillPath(Brushes.White, rp);
+                            g.DrawPath(pen, rp);
+                        }
+                        break;
                     case 20: // upload
                         g.DrawLine(pen, P(0, 4), P(0, -7));
                         g.DrawLines(pen, new[] { P(-5, -2), P(0, -7), P(5, -2) });
@@ -551,7 +720,7 @@ namespace Capturo
     }
 
     // ------------------------------------------------------------ Annotations
-    enum Tool { None = 0, Pen = 1, Line = 2, Arrow = 3, Rect = 4, Marker = 5, Text = 6 }
+    enum Tool { None = 0, Pen = 1, Line = 2, Arrow = 3, Rect = 4, Marker = 5, Text = 6, Blur = 9, Step = 10, Ellipse = 11, Spot = 12 }
 
     class Annot
     {
@@ -561,13 +730,183 @@ namespace Capturo
         public List<PointF> Pts = new List<PointF>();
         public PointF A, B;
         public string Text = "";
+        public Bitmap Src;              // pixelar: imagem original de onde sai o mosaico
+        Bitmap mosaic; Rectangle mosaicRect; int mosaicBlock;
 
         public Font MakeFont() { return new Font("Segoe UI", 14 + Width * 3, FontStyle.Bold, GraphicsUnit.Pixel); }
+
+        public static bool IsTool(int id) { return (id >= 1 && id <= 6) || (id >= 9 && id <= 12); }
+
+        public Annot Clone()
+        {
+            var c = (Annot)MemberwiseClone();
+            c.Pts = new List<PointF>(Pts);
+            c.mosaic = null;
+            return c;
+        }
+
+        // Posiciona a anotação no lugar de "orig" deslocado por (dx, dy).
+        public void MoveFrom(Annot orig, float dx, float dy)
+        {
+            A = new PointF(orig.A.X + dx, orig.A.Y + dy);
+            B = new PointF(orig.B.X + dx, orig.B.Y + dy);
+            for (int i = 0; i < Pts.Count && i < orig.Pts.Count; i++) Pts[i] = new PointF(orig.Pts[i].X + dx, orig.Pts[i].Y + dy);
+        }
+
+        RectangleF Box { get { return RectangleF.FromLTRB(Math.Min(A.X, B.X), Math.Min(A.Y, B.Y), Math.Max(A.X, B.X), Math.Max(A.Y, B.Y)); } }
+        float StrokeHalf { get { return (Kind == Tool.Marker ? Math.Max(10, Width * 5) : Width) / 2; } }
+
+        static readonly Graphics measure = Graphics.FromImage(new Bitmap(1, 1));
+
+        public RectangleF Bounds()
+        {
+            switch (Kind)
+            {
+                case Tool.Pen:
+                case Tool.Marker:
+                    {
+                        if (Pts.Count == 0) return RectangleF.Empty;
+                        float l = Pts[0].X, t = Pts[0].Y, r = l, b = t;
+                        foreach (var q in Pts) { l = Math.Min(l, q.X); t = Math.Min(t, q.Y); r = Math.Max(r, q.X); b = Math.Max(b, q.Y); }
+                        float w = StrokeHalf;
+                        return RectangleF.FromLTRB(l - w, t - w, r + w, b + w);
+                    }
+                case Tool.Step:
+                    {
+                        float d = StepDiameter;
+                        return new RectangleF(A.X - d / 2, A.Y - d / 2, d, d);
+                    }
+                case Tool.Text:
+                    using (var f = MakeFont())
+                    {
+                        SizeF sz = measure.MeasureString(Text.Length == 0 ? "W" : Text, f);
+                        return new RectangleF(A.X, A.Y, sz.Width, sz.Height);
+                    }
+                case Tool.Blur:
+                case Tool.Spot:
+                    return Box;
+                default:
+                    {
+                        var r = Box;
+                        float e = Width / 2 + (Kind == Tool.Arrow ? Width * 2 + 5 : 0);
+                        r.Inflate(e, e);
+                        return r;
+                    }
+            }
+        }
+
+        static float SegDist(PointF p, PointF a, PointF b)
+        {
+            float dx = b.X - a.X, dy = b.Y - a.Y, len = dx * dx + dy * dy;
+            float t = len < 0.01f ? 0 : Math.Max(0, Math.Min(1, ((p.X - a.X) * dx + (p.Y - a.Y) * dy) / len));
+            float x = a.X + t * dx - p.X, y = a.Y + t * dy - p.Y;
+            return (float)Math.Sqrt(x * x + y * y);
+        }
+
+        public bool HitTest(PointF p, float tol)
+        {
+            switch (Kind)
+            {
+                case Tool.Pen:
+                case Tool.Marker:
+                    {
+                        float w = StrokeHalf + tol;
+                        if (Pts.Count == 1) return SegDist(p, Pts[0], Pts[0]) <= w;
+                        for (int i = 1; i < Pts.Count; i++) if (SegDist(p, Pts[i - 1], Pts[i]) <= w) return true;
+                        return false;
+                    }
+                case Tool.Line:
+                case Tool.Arrow:
+                    return SegDist(p, A, B) <= Width / 2 + tol + (Kind == Tool.Arrow ? Width : 0);
+                case Tool.Rect:
+                case Tool.Ellipse:
+                    {
+                        var r = Box;
+                        float w = Width / 2 + tol;
+                        var outer = r; outer.Inflate(w, w);
+                        if (!outer.Contains(p)) return false;
+                        var inner = r; inner.Inflate(-w, -w);
+                        if (inner.Width <= 0 || inner.Height <= 0) return true;
+                        if (Kind == Tool.Rect) return !inner.Contains(p);
+                        // elipse: distância aproximada ao contorno
+                        float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, rx = Math.Max(1, r.Width / 2), ry = Math.Max(1, r.Height / 2);
+                        double nx = (p.X - cx) / rx, ny = (p.Y - cy) / ry, d = Math.Sqrt(nx * nx + ny * ny);
+                        return Math.Abs(d - 1) * Math.Min(rx, ry) <= w;
+                    }
+                default:
+                    {
+                        var b = Bounds(); b.Inflate(tol / 2, tol / 2);
+                        return b.Contains(p);
+                    }
+            }
+        }
+
+        public float StepDiameter { get { return 24 + Width * 3; } }
+
+        public void DisposeCache() { if (mosaic != null) { mosaic.Dispose(); mosaic = null; } }
+
+        void DrawMosaic(Graphics g)
+        {
+            if (Src == null) return;
+            var r = Rectangle.FromLTRB((int)Math.Min(A.X, B.X), (int)Math.Min(A.Y, B.Y), (int)Math.Max(A.X, B.X), (int)Math.Max(A.Y, B.Y));
+            r.Intersect(new Rectangle(0, 0, Src.Width, Src.Height));
+            if (r.Width < 2 || r.Height < 2) return;
+            int bs = Math.Max(6, (int)(Width * 2.5f) + 6);
+            int sw = (r.Width + bs - 1) / bs, sh = (r.Height + bs - 1) / bs;
+            if (mosaic == null || mosaicRect != r || mosaicBlock != bs)
+            {
+                DisposeCache();
+                mosaic = new Bitmap(sw, sh, PixelFormat.Format32bppArgb);
+                using (var mg = Graphics.FromImage(mosaic))
+                {
+                    // reduz com média dos pixels: cada bloco vira uma cor
+                    mg.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                    mg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    mg.CompositingMode = CompositingMode.SourceCopy;
+                    using (var ia = new ImageAttributes())
+                    {
+                        ia.SetWrapMode(WrapMode.TileFlipXY);
+                        mg.DrawImage(Src, new Rectangle(0, 0, sw, sh), r.X, r.Y, sw * bs, sh * bs, GraphicsUnit.Pixel, ia);
+                    }
+                }
+                mosaicRect = r; mosaicBlock = bs;
+            }
+            var st = g.Save();
+            g.SetClip(r, CombineMode.Intersect);
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.CompositingMode = CompositingMode.SourceCopy;
+            g.DrawImage(mosaic, new Rectangle(r.X, r.Y, sw * bs, sh * bs), 0, 0, sw, sh, GraphicsUnit.Pixel);
+            g.Restore(st);
+        }
+
+        void DrawStep(Graphics g)
+        {
+            float d = StepDiameter;
+            var rc = new RectangleF(A.X - d / 2, A.Y - d / 2, d, d);
+            using (var sh = new SolidBrush(Color.FromArgb(60, 0, 0, 0))) g.FillEllipse(sh, rc.X, rc.Y + 1.5f, d, d);
+            using (var fill = new SolidBrush(Color)) g.FillEllipse(fill, rc);
+            using (var ring = new Pen(Color.White, Math.Max(2f, d / 14))) g.DrawEllipse(ring, rc);
+            bool light = Color.R * 0.299 + Color.G * 0.587 + Color.B * 0.114 > 170;
+            using (var f = new Font("Segoe UI", d * (Text.Length > 1 ? 0.42f : 0.52f), FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var tb = new SolidBrush(light ? Color.FromArgb(22, 22, 28) : Color.White))
+            using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
+            {
+                rc.Offset(0, d * 0.02f);
+                g.DrawString(Text, f, tb, rc, sf);
+            }
+        }
 
         public void Draw(Graphics g, bool editing, bool caretOn)
         {
             switch (Kind)
             {
+                case Tool.Blur: DrawMosaic(g); break;
+                case Tool.Step: DrawStep(g); break;
+                case Tool.Spot: break; // desenhado em conjunto pela sobreposição (escurece o resto)
+                case Tool.Ellipse:
+                    using (var pen = new Pen(Color, Width)) g.DrawEllipse(pen, Box);
+                    break;
                 case Tool.Pen:
                 case Tool.Marker:
                     {
@@ -625,10 +964,10 @@ namespace Capturo
 
     class OverlayForm : Form
     {
-        enum Drag { None, NewSel, Move, Resize, Draw }
+        enum Drag { None, NewSel, Move, Resize, Draw, MoveAnnot }
 
-        static readonly int[] ToolIds = { 1, 2, 3, 4, 5, 6, -1, 7, 8 };
-        static readonly int[] ActIds = { 20, 21, 22, 23, -1, 27, 24, 25, -1, 26 };
+        static readonly int[] ToolIds = { 13, 1, 2, 3, 4, 11, 5, 6, 9, 10, 12, -1, 7, 8 };
+        static readonly int[] ActIds = { 20, 21, 22, 23, -1, 29, 31, 28, 30, -1, 27, 24, 25, -1, 26 };
 
         readonly TrayApp app;
         readonly Bitmap shot, dim;
@@ -640,8 +979,14 @@ namespace Capturo
         Tool tool = Tool.None;
         Color color; int thick;
         readonly List<Annot> annots = new List<Annot>();
-        readonly List<Annot> redo = new List<Annot>();
+        // desfazer/refazer guardam cópias completas da lista de anotações
+        readonly List<List<Annot>> undoStack = new List<List<Annot>>(), redoStack = new List<List<Annot>>();
         Annot cur, editingText;
+        bool textIsNew;
+        Annot picked, pickedOrig;          // anotação selecionada com a ferramenta Mover
+        List<Annot> pendingSnap;           // estado antes de arrastar a anotação
+        public bool GifMode;               // a captura foi aberta para gravar GIF (Enter grava)
+        public bool VideoMode;             // a captura foi aberta para gravar vídeo (Enter grava)
         bool caretOn = true;
         readonly List<Btn> btns = new List<Btn>();
         Rectangle toolPanel, actPanel;
@@ -655,6 +1000,12 @@ namespace Capturo
         bool paletteOpen; Rectangle paletteRect, moreRect; readonly Rectangle[] swatchRects = new Rectangle[Art.Palette.Length];
         int hoverSwatch = -1; bool hoverMore;
         readonly Font fontUi, fontUiB, fontSmall;
+        // janelas visíveis no momento da captura (coordenadas do cliente, da frente para trás)
+        readonly List<Rectangle> windows = new List<Rectangle>();
+        readonly List<IntPtr> windowHandles = new List<IntPtr>();
+        Rectangle hoverWin;
+        // seleção feita clicando numa janela: no vídeo, grava a própria janela (acompanha se mover)
+        IntPtr selWindow; Rectangle selWindowRect;
 
         public OverlayForm(TrayApp app, Bitmap shot, Rectangle vs, bool pinMode)
         {
@@ -671,7 +1022,8 @@ namespace Capturo
             Text = "Capturo";
             Cursor = Cursors.Cross;
             KeyPreview = true;
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.Opaque, true);
+            // buffer duplo próprio (abaixo): o do WinForms recria um buffer de tela inteira a cada redesenho
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.Opaque, true);
 
             using (var g = CreateGraphics()) scale = Math.Max(1f, g.DpiX / 96f);
             fontUi = new Font("Segoe UI", 12 * scale, FontStyle.Regular, GraphicsUnit.Pixel);
@@ -684,6 +1036,19 @@ namespace Capturo
                 g.DrawImage(shot, new Rectangle(0, 0, shot.Width, shot.Height), 0, 0, shot.Width, shot.Height, GraphicsUnit.Pixel);
                 using (var br = new SolidBrush(Color.FromArgb(120, 8, 8, 16))) g.FillRectangle(br, 0, 0, shot.Width, shot.Height);
             }
+
+            try
+            {
+                List<IntPtr> hs;
+                var rects = Native.VisibleWindowRects(Handle, out hs);
+                for (int i = 0; i < rects.Count; i++)
+                {
+                    var c = rects[i]; c.Offset(-vs.X, -vs.Y);
+                    c.Intersect(new Rectangle(0, 0, shot.Width, shot.Height));
+                    if (c.Width >= 20 && c.Height >= 20) { windows.Add(c); windowHandles.Add(hs[i]); }
+                }
+            }
+            catch { }
 
             timer.Interval = 500;
             timer.Tick += (s, e) =>
@@ -709,6 +1074,7 @@ namespace Capturo
             Native.ForceForeground(Handle);
             Activate();
             mouse = PointToClient(Cursor.Position);
+            if (hasSel) LayoutBars();
             Invalidate();
         }
 
@@ -718,7 +1084,8 @@ namespace Capturo
             TrayApp.S.ColorArgb = color.ToArgb();
             TrayApp.S.Thickness = thick;
             TrayApp.S.Save();
-            shot.Dispose(); dim.Dispose();
+            foreach (var a in annots) a.DisposeCache();
+            shot.Dispose(); dim.Dispose(); bufCtx.Dispose();
             fontUi.Dispose(); fontUiB.Dispose(); fontSmall.Dispose();
             if (shareMenu != null) shareMenu.Dispose();
             base.OnFormClosed(e);
@@ -737,6 +1104,10 @@ namespace Capturo
             {
                 case 1: return "Lápis"; case 2: return "Linha"; case 3: return "Seta"; case 4: return "Retângulo";
                 case 5: return "Marcador"; case 6: return "Texto"; case 7: return "Cor"; case 8: return "Desfazer";
+                case 9: return "Pixelar"; case 10: return "Numeração";
+                case 11: return "Elipse"; case 12: return "Destaque (escurece o resto)"; case 13: return "Mover e editar anotações";
+                case 28: return "Gravar GIF da área"; case 29: return "Selecionar texto na imagem (OCR)"; case 30: return "Moldura com sombra";
+                case 31: return "Gravar vídeo da área (com zoom e áudio)";
                 case 20: return "Enviar para a nuvem"; case 21: return "Compartilhar"; case 22: return "Buscar semelhantes";
                 case 23: return "Imprimir"; case 24: return "Copiar"; case 25: return "Salvar"; case 26: return "Fechar";
                 case 27: return "Fixar na tela";
@@ -749,6 +1120,9 @@ namespace Capturo
             switch (id)
             {
                 case 1: return "P"; case 2: return "L"; case 3: return "A"; case 4: return "R"; case 5: return "M"; case 6: return "T";
+                case 9: return "B"; case 10: return "N";
+                case 11: return "E"; case 12: return "H"; case 13: return "V";
+                case 28: return "Ctrl+R"; case 29: return "Ctrl+O"; case 30: return "F"; case 31: return "Ctrl+Shift+R";
                 case 7: return "C"; case 8: return "Ctrl+Z"; case 20: return "Ctrl+D"; case 22: return "Ctrl+G"; case 23: return "Ctrl+P";
                 case 24: return "Ctrl+C"; case 25: return "Ctrl+S"; case 26: return "Esc"; case 27: return "Ctrl+T";
             }
@@ -765,22 +1139,26 @@ namespace Capturo
             int b = S(34 * f), pad = S(5 * f), gap = S(8), sep = S(9 * f);
             int W = ClientSize.Width, H = ClientSize.Height;
 
-            int vlen = 0; foreach (int id in ToolIds) vlen += id < 0 ? sep : b;
+            // gravando (GIF ou vídeo): as ferramentas de desenho não entram na gravação, então somem
+            bool rec = GifMode || VideoMode;
+            int[] toolIds = rec ? new int[0] : ToolIds;
+            int[] actIds = rec ? new[] { VideoMode ? 31 : 28, -1, 26 } : ActIds;
+            int vlen = 0; foreach (int id in toolIds) vlen += id < 0 ? sep : b;
             int vh = vlen + pad * 2, vw = b + pad * 2;
             int vx = sel.Right + gap;
             if (vx + vw > W) vx = sel.Left - gap - vw;
             if (vx < 0) vx = sel.Right - vw - gap;
             int vy = Math.Max(0, Math.Min(sel.Bottom - vh, H - vh));
-            toolPanel = new Rectangle(vx, vy, vw, vh);
+            toolPanel = rec ? Rectangle.Empty : new Rectangle(vx, vy, vw, vh);
             int y = vy + pad;
-            foreach (int id in ToolIds)
+            foreach (int id in toolIds)
             {
                 int len = id < 0 ? sep : b;
                 btns.Add(new Btn { Id = id, R = new Rectangle(vx + pad, y, b, len) });
                 y += len;
             }
 
-            int hlen = 0; foreach (int id in ActIds) hlen += id < 0 ? sep : b;
+            int hlen = 0; foreach (int id in actIds) hlen += id < 0 ? sep : b;
             int hw = hlen + pad * 2, hh = b + pad * 2;
             int hy = sel.Bottom + gap;
             if (hy + hh > H) hy = sel.Top - gap - hh;
@@ -789,7 +1167,7 @@ namespace Capturo
             if (toolPanel.IntersectsWith(new Rectangle(hx, hy, hw, hh))) hx = Math.Max(0, vx - hw - gap);
             actPanel = new Rectangle(hx, hy, hw, hh);
             int x = hx + pad;
-            foreach (int id in ActIds)
+            foreach (int id in actIds)
             {
                 int len = id < 0 ? sep : b;
                 btns.Add(new Btn { Id = id, R = new Rectangle(x, hy + pad, len, b) });
@@ -867,6 +1245,12 @@ namespace Capturo
         static Rectangle FromPoints(Point a, Point b)
         {
             return Rectangle.FromLTRB(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(a.X, b.X), Math.Max(a.Y, b.Y));
+        }
+
+        Rectangle HitWindow(Point p)
+        {
+            foreach (var r in windows) if (r.Contains(p)) return r;
+            return Rectangle.Empty;
         }
 
         void Flash(string text) { flash = text; flashUntil = DateTime.Now.AddSeconds(1.2); Invalidate(); }
@@ -964,6 +1348,17 @@ namespace Capturo
                 if (HitBtn(p) == null || HitBtn(p).Id == 7) return;
             }
 
+            // modo texto: dentro da área, o mouse seleciona o texto da imagem
+            if (textMode && hasSel && sel.Contains(p) && HitBtn(p) == null && HitHandle(p) < 0)
+            {
+                if (e.Button == MouseButtons.Right) { ShowTextMenu(p); return; }
+                if (e.Button == MouseButtons.Left)
+                {
+                    liveDrag = Live.MouseDown(p, (ModifierKeys & Keys.Shift) != 0) && live.Dragging;
+                    return;
+                }
+            }
+
             if (e.Button == MouseButtons.Right)
             {
                 FinishText();
@@ -991,9 +1386,13 @@ namespace Capturo
             if (tool != Tool.None && sel.Contains(p))
             {
                 var a = new Annot { Kind = tool, Color = color, Width = thick, A = p, B = p };
+                if (tool == Tool.Blur) a.Src = shot;
+                if (tool == Tool.Step) a.Text = (annots.FindAll(x => x.Kind == Tool.Step).Count + 1).ToString();
+                picked = null;
                 if (tool == Tool.Text)
                 {
-                    editingText = a; caretOn = true; annots.Add(a); redo.Clear();
+                    Snapshot(); textIsNew = true;
+                    editingText = a; caretOn = true; annots.Add(a);
                     Invalidate();
                     return;
                 }
@@ -1001,7 +1400,21 @@ namespace Capturo
                 cur = a; drag = Drag.Draw;
                 return;
             }
-            if (tool == Tool.None && sel.Contains(p)) { drag = Drag.Move; dragStart = p; selStart = sel; return; }
+            if (tool == Tool.None && sel.Contains(p))
+            {
+                var hit = HitAnnot(p);
+                if (hit != null)
+                {
+                    // pega a anotação para mover; o estado só vai para o desfazer se ela realmente andar
+                    picked = hit; pickedOrig = hit.Clone(); pendingSnap = CloneList(annots);
+                    drag = Drag.MoveAnnot; dragStart = p;
+                    Invalidate();
+                    return;
+                }
+                if (picked != null) { picked = null; Invalidate(); }
+                drag = Drag.Move; dragStart = p; selStart = sel;
+                return;
+            }
 
             if (annots.Count == 0)
             {
@@ -1013,8 +1426,22 @@ namespace Capturo
         protected override void OnMouseDoubleClick(MouseEventArgs e)
         {
             base.OnMouseDoubleClick(e);
+            if (textMode) return;   // no modo texto o duplo clique seleciona a palavra
             if (e.Button == MouseButtons.Left && hasSel && tool == Tool.None && sel.Contains(e.Location) && HitBtn(e.Location) == null)
-                DoAction(pinMode ? 27 : 24);
+            {
+                var hit = HitAnnot(e.Location);
+                if (hit != null && hit.Kind == Tool.Text)
+                {
+                    // duplo clique num texto: volta a editar
+                    drag = Drag.None; pendingSnap = null;
+                    Snapshot(); textIsNew = false;
+                    editingText = hit; caretOn = true; picked = null;
+                    Invalidate();
+                    return;
+                }
+                if (hit != null) return;
+                DoAction(DefaultAction);
+            }
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
@@ -1024,6 +1451,7 @@ namespace Capturo
             Point old = mouse;
             mouse = p;
             bool shift = (ModifierKeys & Keys.Shift) != 0;
+            if (liveDrag) { live.MouseMove(p); return; }
 
             switch (drag)
             {
@@ -1051,16 +1479,22 @@ namespace Capturo
                         LayoutBars();
                         break;
                     }
+                case Drag.MoveAnnot:
+                    if (p == dragStart) return;
+                    if (pendingSnap != null) { PushUndo(pendingSnap); pendingSnap = null; }
+                    picked.MoveFrom(pickedOrig, p.X - dragStart.X, p.Y - dragStart.Y);
+                    break;
                 case Drag.Draw:
                     if (cur.Kind == Tool.Pen || cur.Kind == Tool.Marker)
                     {
                         var last = cur.Pts[cur.Pts.Count - 1];
                         if (Math.Abs(last.X - p.X) + Math.Abs(last.Y - p.Y) >= 1) cur.Pts.Add(p);
                     }
+                    else if (cur.Kind == Tool.Step) cur.A = cur.B = p; // o número acompanha o mouse até soltar
                     else
                     {
                         PointF q = p;
-                        if (shift) q = Constrain(cur.A, p, cur.Kind == Tool.Rect);
+                        if (shift) q = Constrain(cur.A, p, cur.Kind == Tool.Rect || cur.Kind == Tool.Blur || cur.Kind == Tool.Ellipse || cur.Kind == Tool.Spot);
                         cur.B = q;
                     }
                     break;
@@ -1079,12 +1513,16 @@ namespace Capturo
                         if (bt != null || sw >= 0 || more) Cursor = Cursors.Hand;
                         else if (paletteOpen && paletteRect.Contains(p)) Cursor = Cursors.Default;
                         else if (h >= 0) Cursor = HandleCursors[h];
+                        else if (hasSel && sel.Contains(p) && textMode)
+                            Cursor = Live.Over(p) ? Cursors.IBeam : Cursors.Default;
                         else if (hasSel && sel.Contains(p))
-                            Cursor = tool == Tool.None ? Cursors.SizeAll : (tool == Tool.Text ? Cursors.IBeam : Cursors.Cross);
+                            Cursor = tool == Tool.None ? (HitAnnot(p) != null ? Cursors.Hand : Cursors.SizeAll) : (tool == Tool.Text ? Cursors.IBeam : Cursors.Cross);
                         else Cursor = Cursors.Cross;
 
                         if (!hasSel)
                         {
+                            var w = HitWindow(p);
+                            if (w != hoverWin) { hoverWin = w; Invalidate(); return; }
                             // redesenha só a mira e a lupa (muito mais leve em telas grandes)
                             InvalidateCrosshair(old);
                             InvalidateCrosshair(p);
@@ -1121,9 +1559,30 @@ namespace Capturo
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
-            if (drag == Drag.NewSel && (sel.Width < 3 || sel.Height < 3)) hasSel = false;
-            if (drag == Drag.Draw && cur != null) { annots.Add(cur); redo.Clear(); cur = null; }
+            if (liveDrag) { liveDrag = false; live.MouseUp(); return; }
+            if (drag == Drag.NewSel && (sel.Width < 3 || sel.Height < 3))
+            {
+                // clique sem arrastar: seleciona a janela (ou o monitor) sob o cursor
+                var w = HitWindow(e.Location);
+                if (w.Width >= 3 && w.Height >= 3)
+                {
+                    sel = w;
+                    int wi = windows.IndexOf(w);
+                    selWindow = wi >= 0 && wi < windowHandles.Count ? windowHandles[wi] : IntPtr.Zero;
+                    selWindowRect = w;
+                    if (VideoMode && selWindow != IntPtr.Zero) Flash("Vai gravar só esta janela (mesmo se ela for movida)");
+                }
+                else hasSel = false;
+            }
+            if (drag == Drag.Draw && cur != null)
+            {
+                bool empty = (cur.Kind == Tool.Blur || cur.Kind == Tool.Spot) && (Math.Abs(cur.B.X - cur.A.X) < 3 || Math.Abs(cur.B.Y - cur.A.Y) < 3);
+                if (!empty) { Snapshot(); annots.Add(cur); }
+                cur = null;
+            }
             drag = Drag.None;
+            pendingSnap = null;
+            if (textMode && hasSel && sel != liveSel && sel.Width >= 8 && sel.Height >= 8) StartLive();   // a área mudou: lê de novo
             LayoutBars();
             Invalidate();
         }
@@ -1133,6 +1592,7 @@ namespace Capturo
             base.OnMouseWheel(e);
             thick = Math.Max(1, Math.Min(20, thick + (e.Delta > 0 ? 1 : -1)));
             if (editingText != null) editingText.Width = thick;
+            else if (picked != null) { Snapshot(); picked.Width = thick; }
             Flash("Espessura  " + thick);
         }
 
@@ -1173,6 +1633,8 @@ namespace Capturo
             {
                 if (paletteOpen) { paletteOpen = false; Invalidate(); }
                 else if (editingText != null) { FinishText(); Invalidate(); }
+                else if (picked != null) { picked = null; Invalidate(); }
+                else if (textMode && live != null && live.HasSelection) live.ClearSelection();
                 else Close();
                 return;
             }
@@ -1181,15 +1643,20 @@ namespace Capturo
                 e.SuppressKeyPress = true;
                 switch (e.KeyCode)
                 {
-                    case Keys.C: if (hasSel) DoAction(24); else CopyPixelColor(); return;
+                    // no modo OCR o Ctrl+C só copia o texto selecionado (não copia a imagem nem fecha a captura)
+                    case Keys.C: if (textMode) CopySelectedLiveText(); else if (hasSel) DoAction(24); else CopyPixelColor(); return;
                     case Keys.S: if (hasSel) DoAction(25); return;
                     case Keys.D: if (hasSel) DoAction(20); return;
                     case Keys.G: if (hasSel) DoAction(22); return;
                     case Keys.P: if (hasSel) DoAction(23); return;
                     case Keys.T: if (hasSel) DoAction(27); return;
+                    case Keys.R: if (hasSel) DoAction(e.Shift ? 31 : 28); return;
+                    case Keys.O: if (hasSel) DoAction(29); return;
                     case Keys.Z: Undo(); return;
-                    case Keys.Y: if (redo.Count > 0) { annots.Add(redo[redo.Count - 1]); redo.RemoveAt(redo.Count - 1); Invalidate(); } return;
-                    case Keys.A: FinishText(); sel = new Rectangle(Point.Empty, ClientSize); hasSel = true; LayoutBars(); Invalidate(); return;
+                    case Keys.Y: Redo(); return;
+                    case Keys.A:
+                        if (textMode) { Live.SelectAll(); return; }
+                        FinishText(); sel = new Rectangle(Point.Empty, ClientSize); hasSel = true; LayoutBars(); Invalidate(); return;
                 }
                 e.SuppressKeyPress = false;
                 return;
@@ -1198,13 +1665,24 @@ namespace Capturo
 
             switch (e.KeyCode)
             {
-                case Keys.Enter: if (hasSel) DoAction(pinMode ? 27 : 24); break;
+                case Keys.Enter: if (textMode) CopyLiveText(); else if (hasSel) DoAction(DefaultAction); break;
+                case Keys.Delete:
+                case Keys.Back:
+                    if (picked == null) return;
+                    Snapshot(); annots.Remove(picked); picked.DisposeCache(); picked = null; Invalidate();
+                    break;
                 case Keys.P: SetTool(Tool.Pen); break;
                 case Keys.L: SetTool(Tool.Line); break;
                 case Keys.A: SetTool(Tool.Arrow); break;
                 case Keys.R: SetTool(Tool.Rect); break;
                 case Keys.M: SetTool(Tool.Marker); break;
                 case Keys.T: SetTool(Tool.Text); break;
+                case Keys.B: SetTool(Tool.Blur); break;
+                case Keys.N: SetTool(Tool.Step); break;
+                case Keys.E: SetTool(Tool.Ellipse); break;
+                case Keys.H: SetTool(Tool.Spot); break;
+                case Keys.V: if (hasSel) { FinishText(); tool = Tool.None; Invalidate(); } break;
+                case Keys.F: if (hasSel) ToggleFrame(); break;
                 case Keys.C: if (hasSel) { paletteOpen = !paletteOpen; LayoutBars(); Invalidate(); } else CopyPixelColor(); break;
                 default: return;
             }
@@ -1236,21 +1714,208 @@ namespace Capturo
         void FinishText()
         {
             if (editingText == null) return;
-            if (editingText.Text.Trim().Length == 0) annots.Remove(editingText);
+            if (editingText.Text.Trim().Length == 0)
+            {
+                annots.Remove(editingText);
+                // texto novo que ficou vazio: descarta também o passo de desfazer criado para ele
+                if (textIsNew && undoStack.Count > 0) undoStack.RemoveAt(undoStack.Count - 1);
+            }
             editingText = null;
+        }
+
+        static List<Annot> CloneList(List<Annot> src)
+        {
+            var l = new List<Annot>(src.Count);
+            foreach (var a in src) l.Add(a.Clone());
+            return l;
+        }
+
+        void Snapshot() { PushUndo(CloneList(annots)); }
+
+        void PushUndo(List<Annot> state)
+        {
+            undoStack.Add(state);
+            if (undoStack.Count > 200) undoStack.RemoveAt(0);
+            redoStack.Clear();
+        }
+
+        void Restore(List<Annot> state)
+        {
+            foreach (var a in annots) a.DisposeCache();
+            annots.Clear();
+            annots.AddRange(state);
+            picked = null;
+            Invalidate();
         }
 
         void Undo()
         {
             FinishText();
-            if (annots.Count > 0) { redo.Add(annots[annots.Count - 1]); annots.RemoveAt(annots.Count - 1); }
+            if (undoStack.Count == 0) { Invalidate(); return; }
+            redoStack.Add(CloneList(annots));
+            var st = undoStack[undoStack.Count - 1];
+            undoStack.RemoveAt(undoStack.Count - 1);
+            Restore(st);
+        }
+
+        void Redo()
+        {
+            FinishText();
+            if (redoStack.Count == 0) return;
+            undoStack.Add(CloneList(annots));
+            var st = redoStack[redoStack.Count - 1];
+            redoStack.RemoveAt(redoStack.Count - 1);
+            Restore(st);
+        }
+
+        Annot HitAnnot(Point p)
+        {
+            float tol = S(5);
+            for (int i = annots.Count - 1; i >= 0; i--)
+                if (annots[i] != editingText && annots[i].HitTest(p, tol)) return annots[i];
+            return null;
+        }
+
+        int DefaultAction { get { return VideoMode ? 31 : GifMode ? 28 : (pinMode ? 27 : 24); } }
+
+        // ---------- texto vivo: selecionar o texto direto sobre a captura
+        LiveText live;
+        bool textMode, liveDrag;
+        Rectangle liveSel;
+        string liveMsg; DateTime liveMsgUntil;
+
+        LiveText Live
+        {
+            get
+            {
+                if (live == null) { live = new LiveText(this); live.Changed += () => Invalidate(); }
+                return live;
+            }
+        }
+
+        void ToggleTextMode()
+        {
+            if (textMode) { ExitTextMode(); return; }
+            if (!hasSel || sel.Width < 8 || sel.Height < 8) { Flash("Selecione uma área com texto"); return; }
+            FinishText();
+            picked = null;
+            tool = Tool.None;
+            paletteOpen = false;
+            textMode = true;
+            StartLive();
             Invalidate();
+        }
+
+        void StartLive()
+        {
+            liveSel = sel;
+            var crop = new Bitmap(sel.Width, sel.Height, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(crop)) g.DrawImage(shot, new Rectangle(0, 0, sel.Width, sel.Height), sel, GraphicsUnit.Pixel);
+            Live.Origin = sel.Location;
+            Live.Scale = 1;
+            Live.Start(crop);
+        }
+
+        void ExitTextMode()
+        {
+            textMode = false; liveDrag = false;
+            if (live != null) live.Reset();
+            Invalidate();
+        }
+
+        void LiveFlash(string msg) { liveMsg = msg; liveMsgUntil = DateTime.Now.AddSeconds(1.6); Invalidate(); }
+
+        void CopyLiveText()
+        {
+            if (live == null || !live.Ready)
+            {
+                LiveFlash(live != null && live.Status == LiveText.State.Reading ? "Ainda lendo o texto..." : "Nenhum texto para copiar");
+                return;
+            }
+            string t = live.HasSelection ? live.SelectedText : live.AllText;
+            try { Clipboard.SetText(t); }
+            catch { LiveFlash("Não foi possível copiar"); return; }
+            TrayApp.S.LastArea = ScreenSel;
+            Close();
+            string preview = System.Text.RegularExpressions.Regex.Replace(t, @"\s+", " ").Trim();
+            app.Notify("Texto copiado", preview.Length > 120 ? preview.Substring(0, 117) + "..." : preview, null);
+        }
+
+        void CopySelectedLiveText()
+        {
+            if (live == null || !live.Ready)
+            {
+                LiveFlash(live != null && live.Status == LiveText.State.Reading ? "Ainda lendo o texto..." : "Nenhum texto para copiar");
+                return;
+            }
+            if (!live.HasSelection) { LiveFlash("Selecione um texto para copiar"); return; }
+            try { Clipboard.SetText(live.SelectedText); }
+            catch { LiveFlash("Não foi possível copiar"); return; }
+            LiveFlash("Texto copiado");
+        }
+
+        void ShowTextMenu(Point p)
+        {
+            var m = new ContextMenuStrip();
+            bool ready = Live.Ready, has = Live.HasSelection;
+            Func<string> pick = () => System.Text.RegularExpressions.Regex.Replace(has ? live.SelectedText : live.AllText, @"\s+", " ").Trim();
+            m.Items.Add(new ToolStripMenuItem("Copiar o texto selecionado", null, (s, e) => CopySelectedLiveText()) { Enabled = has, ShortcutKeyDisplayString = "Ctrl+C" });
+            m.Items.Add(new ToolStripMenuItem("Copiar todo o texto", null, (s, e) => { live.ClearSelection(); CopyLiveText(); }) { Enabled = ready });
+            m.Items.Add(new ToolStripMenuItem("Selecionar tudo", null, (s, e) => live.SelectAll()) { Enabled = ready, ShortcutKeyDisplayString = "Ctrl+A" });
+            m.Items.Add(new ToolStripSeparator());
+            m.Items.Add(new ToolStripMenuItem("Pesquisar no Google", null, (s, e) =>
+            {
+                string q = pick(); Close();
+                try { Process.Start("https://www.google.com/search?q=" + Uri.EscapeDataString(q.Length > 300 ? q.Substring(0, 300) : q)); } catch { }
+            }) { Enabled = ready });
+            m.Items.Add(new ToolStripMenuItem("Traduzir", null, (s, e) =>
+            {
+                string q = pick(); Close();
+                try { Process.Start("https://translate.google.com/?sl=auto&tl=pt&op=translate&text=" + Uri.EscapeDataString(q.Length > 4000 ? q.Substring(0, 4000) : q)); } catch { }
+            }) { Enabled = ready });
+            m.Items.Add(new ToolStripMenuItem("Abrir na janela de texto (editar, salvar...)", null, (s, e) => { var bmp = RenderFinal(); TrayApp.S.LastArea = ScreenSel; Close(); app.CopyText(bmp); }));
+            m.Items.Add(new ToolStripSeparator());
+            m.Items.Add(new ToolStripMenuItem("Voltar às ferramentas de desenho", null, (s, e) => ExitTextMode()) { ShortcutKeyDisplayString = "Ctrl+O" });
+            m.Show(this, p);
+        }
+
+        string LiveStatus()
+        {
+            if (liveMsg != null && DateTime.Now < liveMsgUntil) return liveMsg;
+            switch (Live.Status)
+            {
+                case LiveText.State.Reading: return "Lendo o texto...";
+                case LiveText.State.Empty: return "Nenhum texto encontrado nesta área";
+                case LiveText.State.Error: return "Não foi possível ler: " + live.Error;
+                case LiveText.State.Ready:
+                    return live.HasSelection ? "Ctrl+C copia a seleção · botão direito: mais opções"
+                        : "Arraste sobre o texto para selecionar · Ctrl+A tudo · Ctrl+C copia";
+            }
+            return "";
+        }
+
+        void ToggleFrame()
+        {
+            TrayApp.S.Frame = !TrayApp.S.Frame;
+            Flash(TrayApp.S.Frame ? "Moldura com sombra: ligada" : "Moldura com sombra: desligada");
+        }
+
+        // Abre a captura com uma área já selecionada (repetir a última área).
+        public void Preselect(Rectangle screenRect)
+        {
+            var r = screenRect; r.Offset(-vs.X, -vs.Y);
+            r.Intersect(new Rectangle(0, 0, shot.Width, shot.Height));
+            if (r.Width < 3 || r.Height < 3) return;
+            sel = r; hasSel = true;
+            LayoutBars();
         }
 
         void SetTool(Tool t)
         {
             if (!hasSel) return;
+            if (textMode) ExitTextMode();
             FinishText();
+            picked = null;
             tool = tool == t ? Tool.None : t;
             Invalidate();
         }
@@ -1259,6 +1924,8 @@ namespace Capturo
         {
             color = c;
             if (editingText != null) editingText.Color = c;
+            else if (picked != null) { Snapshot(); picked.Color = c; }
+            Invalidate();
         }
 
         void PickColorDialog()
@@ -1274,7 +1941,9 @@ namespace Capturo
 
         void OnButton(Btn bt)
         {
-            if (bt.Id >= 1 && bt.Id <= 6) SetTool((Tool)bt.Id);
+            if (Annot.IsTool(bt.Id)) SetTool((Tool)bt.Id);
+            else if (bt.Id == 13) { FinishText(); tool = Tool.None; Invalidate(); }
+            else if (bt.Id == 30) ToggleFrame();
             else if (bt.Id == 7) { paletteOpen = !paletteOpen; LayoutBars(); Invalidate(); }
             else if (bt.Id == 8) Undo();
             else DoAction(bt.Id);
@@ -1290,9 +1959,51 @@ namespace Capturo
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
                 g.TranslateTransform(-sel.X, -sel.Y);
-                foreach (var a in annots) a.Draw(g, false, false);
+                DrawAnnots(g, sel, false);
             }
             return b;
+        }
+
+        // Imagem final das ações: aplica a moldura (se ligada), guarda no histórico e lembra a área.
+        Bitmap Final()
+        {
+            var b = RenderFinal();
+            if (TrayApp.S.Frame) { var f = Art.Framed(b); b.Dispose(); b = f; }
+            CaptureHistory.Add(b);
+            TrayApp.S.LastArea = ScreenSel;
+            return b;
+        }
+
+        Rectangle ScreenSel { get { return new Rectangle(sel.X + vs.X, sel.Y + vs.Y, sel.Width, sel.Height); } }
+
+        // Pixelados primeiro, depois o escurecimento dos destaques, depois o resto (setas ficam por cima).
+        void DrawAnnots(Graphics g, Rectangle area, bool live)
+        {
+            var all = new List<Annot>(annots);
+            if (cur != null) all.Add(cur);
+            foreach (var a in all) if (a.Kind == Tool.Blur) a.Draw(g, false, false);
+            bool any = false;
+            using (var rg = new Region(area))
+            {
+                foreach (var a in all)
+                    if (a.Kind == Tool.Spot)
+                    {
+                        var r = a.Bounds();
+                        if (r.Width > 1 && r.Height > 1) { rg.Exclude(r); any = true; }
+                    }
+                if (any) using (var br = new SolidBrush(Color.FromArgb(150, 0, 0, 0))) g.FillRegion(br, rg);
+            }
+            foreach (var a in all)
+                if (a.Kind != Tool.Blur && a.Kind != Tool.Spot) a.Draw(g, live && a == editingText, caretOn);
+            if (live && picked != null && annots.Contains(picked))
+            {
+                var r = picked.Bounds(); r.Inflate(S(4), S(4));
+                var sm = g.SmoothingMode;
+                g.SmoothingMode = SmoothingMode.None;
+                using (var p1 = new Pen(Art.Accent, Math.Max(1, scale))) g.DrawRectangle(p1, r.X, r.Y, r.Width, r.Height);
+                using (var p2 = new Pen(Color.White, Math.Max(1, scale)) { DashStyle = DashStyle.Dash }) g.DrawRectangle(p2, r.X, r.Y, r.Width, r.Height);
+                g.SmoothingMode = sm;
+            }
         }
 
         void DoAction(int id)
@@ -1300,17 +2011,43 @@ namespace Capturo
             if (!hasSel || sel.Width < 1 || sel.Height < 1) return;
             switch (id)
             {
-                case 20: { var bmp = RenderFinal(); Close(); app.UploadAsync(bmp, TrayApp.AfterUpload.Link, null); break; }
+                case 20: { var bmp = Final(); Close(); app.UploadAsync(bmp, TrayApp.AfterUpload.Link, null); break; }
                 case 21: ShowShareMenu(); break;
-                case 22: { var bmp = RenderFinal(); Close(); app.UploadAsync(bmp, TrayApp.AfterUpload.GoogleLens, null); break; }
-                case 23: { var bmp = RenderFinal(); Close(); app.PrintLater(bmp); break; }
+                case 22: { var bmp = Final(); Close(); app.UploadAsync(bmp, TrayApp.AfterUpload.GoogleLens, null); break; }
+                case 23: { var bmp = Final(); Close(); app.PrintLater(bmp); break; }
+                case 28:
+                    {
+                        if (sel.Width < 16 || sel.Height < 16) { Flash("Área pequena demais para gravar"); return; }
+                        var area = ScreenSel;
+                        TrayApp.S.LastArea = area;
+                        Close();
+                        app.StartRecording(area);
+                        break;
+                    }
+                case 31:
+                    {
+                        if (sel.Width < 32 || sel.Height < 32) { Flash("Área pequena demais para gravar"); return; }
+                        var area = ScreenSel;
+                        TrayApp.S.LastArea = area;
+                        // a seleção ainda é a janela clicada: grava a janela (senão, o retângulo)
+                        var win = selWindow != IntPtr.Zero && sel == selWindowRect ? selWindow : IntPtr.Zero;
+                        Close();
+                        app.StartVideo(area, win);
+                        break;
+                    }
+                case 29:
+                    {
+                        // selecionar o texto direto na captura (a janela de texto fica no menu do botão direito)
+                        ToggleTextMode();
+                        break;
+                    }
                 case 24:
-                    using (var bmp = RenderFinal()) { app.CopyImage(bmp); }
+                    using (var bmp = Final()) { app.CopyImage(bmp); }
                     Close();
                     break;
                 case 25:
                     {
-                        var bmp = RenderFinal();
+                        var bmp = Final();
                         bool saved = app.SaveImage(bmp, this);
                         bmp.Dispose();
                         if (saved) Close(); else Native.ForceForeground(Handle);
@@ -1319,8 +2056,9 @@ namespace Capturo
                 case 26: Close(); break;
                 case 27:
                     {
-                        var bmp = RenderFinal();
+                        var bmp = Final();
                         var loc = new Point(sel.X + vs.X, sel.Y + vs.Y);
+                        if (TrayApp.S.Frame) loc.Offset(-Art.FramePad, -Art.FramePad);
                         Close();
                         app.Pin(bmp, loc);
                         break;
@@ -1346,7 +2084,7 @@ namespace Capturo
                     string tpl = n[1];
                     shareMenu.Items.Add(n[0], null, (s, e) =>
                     {
-                        var bmp = RenderFinal(); Close();
+                        var bmp = Final(); Close();
                         app.UploadAsync(bmp, TrayApp.AfterUpload.Share, tpl);
                     });
                 }
@@ -1358,9 +2096,19 @@ namespace Capturo
         // ---------- pintura
         protected override void OnPaintBackground(PaintEventArgs e) { }
 
+        // O buffer do WinForms só é reaproveitado até 225x96 px; acima disso ele cria e descarta um de
+        // tela inteira (16 MB num par de monitores) a cada redesenho. Este fica guardado: ~40% mais rápido.
+        readonly BufferedGraphicsContext bufCtx = new BufferedGraphicsContext();
+
         protected override void OnPaint(PaintEventArgs e)
         {
-            PaintCore(e);
+            bufCtx.MaximumBuffer = new Size(ClientSize.Width + 1, ClientSize.Height + 1);
+            using (var bg = bufCtx.Allocate(e.Graphics, ClientRectangle))
+            {
+                bg.Graphics.SetClip(e.ClipRectangle);
+                PaintCore(new PaintEventArgs(bg.Graphics, e.ClipRectangle));
+                bg.Render(e.Graphics);
+            }
         }
 
         void PaintCore(PaintEventArgs e)
@@ -1379,6 +2127,7 @@ namespace Capturo
 
             if (!hasSel || sel.Width == 0)
             {
+                DrawWindowHover(g, HitWindow(mouse));
                 DrawCrosshair(g, mouse);
                 DrawHint(g);
                 DrawLoupe(g, mouse);
@@ -1388,8 +2137,8 @@ namespace Capturo
             // anotações (recortadas à seleção)
             var st = g.Save();
             g.SetClip(sel);
-            foreach (var a in annots) a.Draw(g, a == editingText, caretOn);
-            if (cur != null) cur.Draw(g, false, false);
+            DrawAnnots(g, sel, true);
+            if (textMode && sel == liveSel) live.Paint(g, !live.HasSelection);
             g.Restore(st);
 
             // borda + alças
@@ -1417,6 +2166,12 @@ namespace Capturo
             int ly = sel.Top - pillH - S(8);
             if (ly < 0) ly = sel.Top + S(8);
             var dimRect = DrawPill(g, dims, new Point(sel.Left, ly), fontUiB, Art.Pill, Color.White);
+            if (textMode)
+            {
+                // estado do texto ao lado das dimensões
+                var tr = DrawPill(g, LiveStatus(), new Point(dimRect.Right + S(6), dimRect.Y), fontUi, Color.FromArgb(235, 40, 110, 245), Color.White);
+                dimRect = tr;
+            }
 
             if (flash != null)
             {
@@ -1436,6 +2191,24 @@ namespace Capturo
             if (ShowLoupe && drag != Drag.None) DrawLoupe(g, mouse);
         }
 
+        // Destaca a janela que um clique selecionaria.
+        void DrawWindowHover(Graphics g, Rectangle r)
+        {
+            if (r.Width <= 0 || r.Height <= 0) return;
+            g.CompositingMode = CompositingMode.SourceCopy;
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = PixelOffsetMode.Half;
+            g.DrawImage(shot, r, r, GraphicsUnit.Pixel);
+            g.CompositingMode = CompositingMode.SourceOver;
+            g.PixelOffsetMode = PixelOffsetMode.Default;
+            g.SmoothingMode = SmoothingMode.None;
+            float w = Math.Max(2, 2 * scale);
+            using (var pen = new Pen(Art.Accent, w)) { pen.Alignment = PenAlignment.Inset; g.DrawRectangle(pen, r.X, r.Y, r.Width, r.Height); }
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            var at = new Point(r.X + S(8), r.Y + S(8));
+            DrawPill(g, r.Width + " × " + r.Height, at, fontUiB, Art.Accent, Color.White);
+        }
+
         void DrawCrosshair(Graphics g, Point p)
         {
             g.SmoothingMode = SmoothingMode.None;
@@ -1453,7 +2226,7 @@ namespace Capturo
             var mon = MonitorAt(mouse);
             // segmentos: texto normal e "teclas"
             object[][] segs = {
-                new object[] { "Arraste para selecionar", false },
+                new object[] { VideoMode ? "Arraste para gravar uma área, ou clique numa janela para gravar só ela" : GifMode ? "Selecione a área do GIF (arraste ou clique numa janela)" : "Arraste para selecionar ou clique numa janela", false },
                 new object[] { "Ctrl+A", true }, new object[] { "tela inteira", false },
                 new object[] { "Ctrl+C", true }, new object[] { "copiar cor", false },
                 new object[] { "Esc", true }, new object[] { "sair", false } };
@@ -1506,7 +2279,7 @@ namespace Capturo
         void DrawTooltip(Graphics g, Btn b)
         {
             string name = TipName(b.Id), key = TipKey(b.Id);
-            if (b.Id == 27 && pinMode) name += " (Enter)";
+            if ((b.Id == 27 && pinMode) || (b.Id == 28 && GifMode) || (b.Id == 31 && VideoMode)) name += " (Enter)";
             SizeF ns = g.MeasureString(name, fontUiB);
             SizeF ks = key != null ? g.MeasureString(key, fontUi) : SizeF.Empty;
             int px = S(10), py = S(5), kg = S(8), kp = S(5);
@@ -1542,7 +2315,7 @@ namespace Capturo
         void DrawBars(Graphics g)
         {
             if (btns.Count == 0) return;
-            DrawPanel(g, toolPanel);
+            if (!toolPanel.IsEmpty) DrawPanel(g, toolPanel);
             DrawPanel(g, actPanel);
             foreach (var b in btns)
             {
@@ -1555,11 +2328,11 @@ namespace Capturo
                     }
                     continue;
                 }
-                bool active = (b.Id >= 1 && b.Id <= 6 && (int)tool == b.Id) || (b.Id == 7 && paletteOpen);
+                bool active = (b.Id == 13 && tool == Tool.None && !textMode) || (Annot.IsTool(b.Id) && (int)tool == b.Id) || (b.Id == 7 && paletteOpen) || (b.Id == 30 && TrayApp.S.Frame) || (b.Id == 29 && textMode);
                 var r = b.R; r.Inflate(-S(2), -S(2));
                 if (active) Art.FillRound(g, Color.FromArgb(40, Art.Accent), r, S(6));
                 else if (b == hover) Art.FillRound(g, b.Id == 26 ? Color.FromArgb(255, 236, 236) : Color.FromArgb(240, 240, 245), r, S(6));
-                Color fg = active ? Art.Accent : (b.Id == 26 ? Color.FromArgb(215, 50, 60) : (b.Id == 27 && pinMode ? Art.Accent : Art.Ink));
+                Color fg = active ? Art.Accent : (b.Id == 26 ? Color.FromArgb(215, 50, 60) : ((b.Id == 27 && pinMode) || (b.Id == 28 && GifMode) || (b.Id == 31 && VideoMode) ? Art.Accent : Art.Ink));
                 Art.Glyph(g, b.Id, b.R, fg, color);
             }
         }
@@ -1604,6 +2377,19 @@ namespace Capturo
         string flash; DateTime flashUntil;
         readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
         readonly ToolStripMenuItem topItem;
+        readonly LiveText live;
+        bool textDrag;
+
+        public void StartReading()
+        {
+            if (live.Status == LiveText.State.Idle && IsHandleCreated && img.Width * img.Height <= 4096 * 2160) live.Start(new Bitmap(img));
+        }
+
+        void CopySelectedText()
+        {
+            if (!live.HasSelection) return;
+            try { Clipboard.SetText(live.SelectedText); Flash("Texto copiado"); } catch { Flash("Não foi possível copiar"); }
+        }
 
         public PinForm(TrayApp app, Bitmap img, Point screenLoc)
         {
@@ -1623,6 +2409,7 @@ namespace Capturo
             var m = new ContextMenuStrip();
             m.Items.Add(new ToolStripMenuItem("Copiar", null, (s, e) => app.CopyImage(img)) { ShortcutKeyDisplayString = "Ctrl+C" });
             m.Items.Add(new ToolStripMenuItem("Salvar como...", null, (s, e) => app.SaveImage(img, this)) { ShortcutKeyDisplayString = "Ctrl+S" });
+            m.Items.Add(new ToolStripMenuItem("Abrir o texto numa janela (OCR)", null, (s, e) => app.CopyText(new Bitmap(img))) { ShortcutKeyDisplayString = "Ctrl+O" });
             m.Items.Add(new ToolStripSeparator());
             topItem = new ToolStripMenuItem("Sempre visível (por cima)") { Checked = true, CheckOnClick = true, ShortcutKeyDisplayString = "Ctrl+T" };
             topItem.CheckedChanged += (s, e) => SetTop(topItem.Checked);
@@ -1637,7 +2424,17 @@ namespace Capturo
             m.Items.Add(new ToolStripMenuItem("Tamanho original", null, (s, e) => SetZoom(1f, new Point(0, 0))) { ShortcutKeyDisplayString = "0" });
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add(new ToolStripMenuItem("Fechar", null, (s, e) => Close()) { ShortcutKeyDisplayString = "Esc" });
+            var copySel = new ToolStripMenuItem("Copiar o texto selecionado", null, (s, e) => CopySelectedText()) { ShortcutKeyDisplayString = "Ctrl+C" };
+            m.Items.Insert(0, copySel);
+            m.Opening += (s, e) => copySel.Visible = live.HasSelection;
             ContextMenuStrip = m;
+
+            // texto vivo: o texto da imagem fica selecionável (lido em segundo plano)
+            live = new LiveText(this);
+            live.Changed += () => Invalidate();
+            // lê o texto só quando o mouse chega na imagem (fixar e só olhar não gasta nada)
+            MouseEnter += (s, e) => StartReading();
+            KeyDown += (s, e) => { if (e.Control && e.KeyCode == Keys.A) StartReading(); };
 
             timer.Interval = 300;
             timer.Tick += (s, e) => { if (flash != null && DateTime.Now > flashUntil) { flash = null; Invalidate(); } };
@@ -1689,6 +2486,9 @@ namespace Capturo
             g.PixelOffsetMode = PixelOffsetMode.Half;
             g.DrawImage(img, new Rectangle(0, 0, ClientSize.Width, ClientSize.Height), 0, 0, img.Width, img.Height, GraphicsUnit.Pixel);
             g.PixelOffsetMode = PixelOffsetMode.Default;
+            live.Origin = PointF.Empty;
+            live.Scale = ClientSize.Width / (float)img.Width;
+            live.Paint(g, false);
             using (var p = new Pen(ContainsFocus ? Art.Accent : Color.FromArgb(150, 120, 120, 130), 1))
                 g.DrawRectangle(p, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
             if (flash != null)
@@ -1711,20 +2511,38 @@ namespace Capturo
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
-            if (e.Button == MouseButtons.Left) { dragging = true; dragOff = e.Location; }
+            if (e.Button != MouseButtons.Left) return;
+            // sobre uma palavra: seleciona texto; fora: arrasta a janela
+            live.Scale = ClientSize.Width / (float)img.Width;
+            if (live.Over(e.Location) || (ModifierKeys & Keys.Shift) != 0 && live.HasSelection)
+            {
+                live.MouseDown(e.Location, (ModifierKeys & Keys.Shift) != 0);
+                textDrag = live.Dragging;
+                return;
+            }
+            if (live.HasSelection) live.ClearSelection();
+            dragging = true; dragOff = e.Location;
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            if (dragging) { var c = Cursor.Position; Location = new Point(c.X - dragOff.X, c.Y - dragOff.Y); }
+            if (textDrag) { live.MouseMove(e.Location); return; }
+            if (dragging) { var c = Cursor.Position; Location = new Point(c.X - dragOff.X, c.Y - dragOff.Y); return; }
+            Cursor = live.Over(e.Location) ? Cursors.IBeam : Cursors.SizeAll;
         }
 
-        protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); dragging = false; }
+        protected override void OnMouseUp(MouseEventArgs e)
+        {
+            base.OnMouseUp(e);
+            if (textDrag) { textDrag = false; live.MouseUp(); }
+            dragging = false;
+        }
 
         protected override void OnMouseDoubleClick(MouseEventArgs e)
         {
             base.OnMouseDoubleClick(e);
+            if (live.Over(e.Location)) return;   // duplo clique numa palavra seleciona a palavra
             if (e.Button == MouseButtons.Left) Close();
         }
 
@@ -1742,8 +2560,10 @@ namespace Capturo
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
-            if (e.KeyCode == Keys.Escape) Close();
-            else if (e.Control && e.KeyCode == Keys.C) app.CopyImage(img);
+            if (e.KeyCode == Keys.Escape) { if (live.HasSelection) live.ClearSelection(); else Close(); }
+            else if (e.Control && e.KeyCode == Keys.C) { if (live.HasSelection) CopySelectedText(); else app.CopyImage(img); }
+            else if (e.Control && e.KeyCode == Keys.A) { live.SelectAll(); if (!live.Ready) Flash("Ainda lendo o texto..."); }
+            else if (e.Control && e.KeyCode == Keys.O) app.CopyText(new Bitmap(img));
             else if (e.Control && e.KeyCode == Keys.S) app.SaveImage(img, this);
             else if (e.Control && e.KeyCode == Keys.T) SetTop(!TopMost);
             else if (e.KeyCode == Keys.D0 || e.KeyCode == Keys.NumPad0) SetZoom(1f, new Point(0, 0));
@@ -1851,9 +2671,9 @@ namespace Capturo
     {
         readonly TextBox folder;
         readonly ComboBox format;
-        readonly CheckBox quick, openAfter, startup;
+        readonly CheckBox quick, openAfter, startup, history;
         readonly TrackBar iconSize;
-        readonly HotkeyBox hkCapture, hkFull, hkPin;
+        readonly HotkeyBox hkCapture, hkFull, hkPin, hkRepeat, hkVideo;
         readonly Label problem;
         readonly float k;
 
@@ -1869,27 +2689,36 @@ namespace Capturo
             StartPosition = FormStartPosition.CenterScreen;
             AutoScaleMode = AutoScaleMode.None;
             Font = new Font("Segoe UI", 12f * k, FontStyle.Regular, GraphicsUnit.Pixel);
-            ClientSize = new Size(D(500), D(610));
+            ClientSize = new Size(D(500), D(510));
             Icon = Art.AppIcon();
             TopMost = true;
             var S = TrayApp.S;
 
+            var tabs = new TabControl { Location = P(10, 10), Size = new Size(D(480), D(446)) };
+            var pgKeys = new TabPage("Atalhos e salvar") { UseVisualStyleBackColor = true };
+            var pgGeneral = new TabPage("Geral") { UseVisualStyleBackColor = true };
+            var pgVideo = new TabPage("Vídeo") { UseVisualStyleBackColor = true };
+            tabs.TabPages.Add(pgKeys); tabs.TabPages.Add(pgGeneral); tabs.TabPages.Add(pgVideo);
+            Controls.Add(tabs);
+
             // --- Atalhos
-            var gk = new GroupBox { Text = "Atalhos de teclado", Location = P(12, 10), Size = new Size(D(476), D(168)) };
-            Controls.Add(gk);
-            problem = new Label { Location = P(14, 138), Size = new Size(D(450), D(20)), ForeColor = Color.FromArgb(200, 40, 40) };
+            var gk = new GroupBox { Text = "Atalhos de teclado", Location = P(8, 8), Size = new Size(D(456), D(234)) };
+            pgKeys.Controls.Add(gk);
+            problem = new Label { Location = P(14, 206), Size = new Size(D(430), D(20)), ForeColor = Color.FromArgb(200, 40, 40) };
             gk.Controls.Add(new Label { Text = "Clique no campo e pressione a combinação (Esc cancela, Backspace limpa).", Location = P(14, 22), AutoSize = true, ForeColor = SystemColors.GrayText });
             hkCapture = AddHotkeyRow(gk, "Capturar área", 46, S.CaptureKey);
             hkFull = AddHotkeyRow(gk, "Salvar tela inteira", 78, S.FullKey);
             hkPin = AddHotkeyRow(gk, "Capturar e fixar na tela", 110, S.PinKey);
+            hkRepeat = AddHotkeyRow(gk, "Repetir a última área", 142, S.RepeatKey);
+            hkVideo = AddHotkeyRow(gk, "Gravar vídeo", 174, S.VideoKey);
             gk.Controls.Add(problem);
 
             // --- Salvamento
-            var gs = new GroupBox { Text = "Salvar", Location = P(12, 188), Size = new Size(D(476), D(134)) };
-            Controls.Add(gs);
+            var gs = new GroupBox { Text = "Salvar", Location = P(8, 250), Size = new Size(D(456), D(134)) };
+            pgKeys.Controls.Add(gs);
             gs.Controls.Add(new Label { Text = "Pasta:", Location = P(14, 30), AutoSize = true });
-            folder = new TextBox { Text = S.SaveFolder, Location = P(90, 26), Width = D(278) };
-            var browse = new Button { Text = "Procurar...", Location = P(376, 24), Size = new Size(D(86), D(28)) };
+            folder = new TextBox { Text = S.SaveFolder, Location = P(90, 26), Width = D(262) };
+            var browse = new Button { Text = "Procurar...", Location = P(358, 24), Size = new Size(D(86), D(28)) };
             browse.Click += (s, e) =>
             {
                 using (var d = new FolderBrowserDialog { SelectedPath = folder.Text })
@@ -1905,38 +2734,85 @@ namespace Capturo
             gs.Controls.Add(quick);
 
             // --- Geral
-            var gg = new GroupBox { Text = "Geral", Location = P(12, 332), Size = new Size(D(476), D(220)) };
-            Controls.Add(gg);
+            var gg = new GroupBox { Text = "Geral", Location = P(8, 8), Size = new Size(D(456), D(250)) };
+            pgGeneral.Controls.Add(gg);
             openAfter = new CheckBox { Text = "Abrir o link no navegador após enviar para a nuvem", Checked = S.OpenAfterUpload, Location = P(16, 28), AutoSize = true };
             startup = new CheckBox { Text = "Iniciar com o Windows", Checked = Settings.StartWithWindows, Location = P(16, 58), AutoSize = true };
-            gg.Controls.Add(openAfter); gg.Controls.Add(startup);
+            history = new CheckBox { Text = "Guardar as últimas " + CaptureHistory.Keep + " capturas na galeria", Checked = S.KeepHistory, Location = P(16, 88), AutoSize = true };
+            gg.Controls.Add(openAfter); gg.Controls.Add(startup); gg.Controls.Add(history);
 
-            gg.Controls.Add(new Label { Text = "Tamanho dos ícones:", Location = P(14, 98), AutoSize = true });
+            gg.Controls.Add(new Label { Text = "Tamanho dos ícones:", Location = P(14, 128), AutoSize = true });
             iconSize = new TrackBar
             {
                 Minimum = Settings.MinIcon / 10, Maximum = Settings.MaxIcon / 10, SmallChange = 1, LargeChange = 2,
-                TickFrequency = 1, Value = S.IconScale / 10, Location = P(150, 90), Size = new Size(D(210), D(34)), AutoSize = false
+                TickFrequency = 1, Value = S.IconScale / 10, Location = P(150, 120), Size = new Size(D(190), D(34)), AutoSize = false
             };
-            var iconPct = new Label { Location = P(364, 98), Size = new Size(D(46), D(20)), TextAlign = ContentAlignment.TopRight };
-            var iconReset = new Button { Text = "100%", Location = P(414, 94), Size = new Size(D(50), D(26)), Font = new Font(Font.FontFamily, 10.5f * k, GraphicsUnit.Pixel) };
-            var preview = new IconPreview { Location = P(14, 132), Size = new Size(D(448), D(76)), Dpi = k };
+            var iconPct = new Label { Location = P(344, 128), Size = new Size(D(46), D(20)), TextAlign = ContentAlignment.TopRight };
+            var iconReset = new Button { Text = "100%", Location = P(394, 124), Size = new Size(D(50), D(26)), Font = new Font(Font.FontFamily, 10.5f * k, GraphicsUnit.Pixel) };
+            var preview = new IconPreview { Location = P(14, 162), Size = new Size(D(428), D(76)), Dpi = k };
             EventHandler sync = (s, e) => { iconPct.Text = iconSize.Value * 10 + "%"; preview.Percent = iconSize.Value * 10; preview.Invalidate(); };
             iconSize.ValueChanged += sync;
             iconReset.Click += (s, e) => iconSize.Value = 10;
             sync(null, null);
             gg.Controls.Add(iconSize); gg.Controls.Add(iconPct); gg.Controls.Add(iconReset); gg.Controls.Add(preview);
 
-            var ok = new Button { Text = "Salvar", Location = P(310, 566), Size = new Size(D(86), D(30)) };
-            var cancel = new Button { Text = "Cancelar", Location = P(402, 566), Size = new Size(D(86), D(30)), DialogResult = DialogResult.Cancel };
+            // --- Vídeo
+            var gv = new GroupBox { Text = "Gravação de vídeo", Location = P(8, 8), Size = new Size(D(456), D(248)) };
+            pgVideo.Controls.Add(gv);
+            gv.Controls.Add(new Label { Text = "Quadros por segundo:", Location = P(14, 32), AutoSize = true });
+            var vfps = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = P(230, 28), Width = D(200) };
+            vfps.Items.AddRange(new object[] { "30 (arquivos menores)", "60 (movimento mais fluido)" });
+            vfps.SelectedIndex = S.VidFps >= 60 ? 1 : 0;
+            gv.Controls.Add(new Label { Text = "Contagem antes de começar:", Location = P(14, 68), AutoSize = true });
+            var vcount = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = P(230, 64), Width = D(200) };
+            vcount.Items.AddRange(new object[] { "Sem contagem", "3 segundos", "5 segundos" });
+            vcount.SelectedIndex = S.VidCountdown >= 5 ? 2 : S.VidCountdown >= 1 ? 1 : 0;
+            gv.Controls.Add(new Label { Text = "Duração máxima:", Location = P(14, 104), AutoSize = true });
+            var vmax = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = P(230, 100), Width = D(200) };
+            vmax.Items.AddRange(new object[] { "5 minutos", "10 minutos", "15 minutos" });
+            vmax.SelectedIndex = S.VidMaxMin <= 5 ? 0 : S.VidMaxMin <= 10 ? 1 : 2;
+            var vsys = new CheckBox { Text = "Gravar o som do computador", Checked = S.RecSys, Location = P(16, 140), AutoSize = true };
+            var vmic = new CheckBox { Text = "Gravar o microfone", Checked = S.RecMic, Location = P(16, 170), AutoSize = true };
+            gv.Controls.Add(vfps); gv.Controls.Add(vcount); gv.Controls.Add(vmax); gv.Controls.Add(vsys); gv.Controls.Add(vmic);
+            gv.Controls.Add(new Label { Text = "Webcam:", Location = P(14, 210), AutoSize = true });
+            var vcam = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Location = P(230, 206), Width = D(200) };
+            vcam.Items.Add("Não gravar");
+            List<string> cams;
+            try { cams = Webcam.Devices(); } catch { cams = new List<string>(); }
+            foreach (var c in cams) vcam.Items.Add(c);
+            int ci = S.VidCam ? Math.Max(0, cams.IndexOf(S.VidCamName)) + 1 : 0;
+            vcam.SelectedIndex = cams.Count == 0 ? 0 : Math.Min(ci, cams.Count);
+            if (cams.Count == 0) { vcam.Items[0] = "Nenhuma câmera encontrada"; vcam.Enabled = false; }
+            gv.Controls.Add(vcam);
+            var ga = new GroupBox { Text = "Ao parar a gravação", Location = P(8, 264), Size = new Size(D(456), D(96)) };
+            pgVideo.Controls.Add(ga);
+            var vEditor = new RadioButton { Text = "Abrir o editor (zoom, cursor, fundo, corte)", Checked = S.VidOpenEditor, Location = P(16, 28), AutoSize = true };
+            var vDirect = new RadioButton { Text = "Exportar o MP4 direto, com o último estilo usado", Checked = !S.VidOpenEditor, Location = P(16, 58), AutoSize = true };
+            ga.Controls.Add(vEditor); ga.Controls.Add(vDirect);
+            pgVideo.Controls.Add(new Label { Text = "O microfone, o som do computador e a webcam também podem ser ligados ou desligados durante a gravação, na barra que aparece embaixo da área. Clique numa janela (em vez de arrastar) para gravar só ela, mesmo se for movida ou coberta.", Location = P(12, 368), Size = new Size(D(450), D(62)), ForeColor = SystemColors.GrayText });
+
+            var ok = new Button { Text = "Salvar", Location = P(310, 470), Size = new Size(D(86), D(30)) };
+            var cancel = new Button { Text = "Cancelar", Location = P(402, 470), Size = new Size(D(86), D(30)), DialogResult = DialogResult.Cancel };
             Controls.Add(ok); Controls.Add(cancel);
             CancelButton = cancel;
             ok.Click += (s, e) =>
             {
-                var keys = new[] { hkCapture.Value, hkFull.Value, hkPin.Value };
-                for (int i = 0; i < 3; i++)
-                    for (int j = i + 1; j < 3; j++)
-                        if (keys[i].Same(keys[j])) { problem.Text = "Dois comandos estão com o mesmo atalho (" + keys[i] + ")."; return; }
-                S.CaptureKey = keys[0]; S.FullKey = keys[1]; S.PinKey = keys[2];
+                var keys = new[] { hkCapture.Value, hkFull.Value, hkPin.Value, hkRepeat.Value, hkVideo.Value };
+                for (int i = 0; i < keys.Length; i++)
+                    for (int j = i + 1; j < keys.Length; j++)
+                        if (keys[i].Same(keys[j])) { tabs.SelectedTab = pgKeys; problem.Text = "Dois comandos estão com o mesmo atalho (" + keys[i] + ")."; return; }
+                S.CaptureKey = keys[0]; S.FullKey = keys[1]; S.PinKey = keys[2]; S.RepeatKey = keys[3]; S.VideoKey = keys[4];
+                S.VidFps = vfps.SelectedIndex == 1 ? 60 : 30;
+                S.VidCountdown = vcount.SelectedIndex == 2 ? 5 : vcount.SelectedIndex == 1 ? 3 : 0;
+                S.VidMaxMin = vmax.SelectedIndex == 0 ? 5 : vmax.SelectedIndex == 1 ? 10 : 15;
+                S.RecSys = vsys.Checked; S.RecMic = vmic.Checked;
+                S.VidOpenEditor = vEditor.Checked;
+                if (vcam.Enabled)
+                {
+                    S.VidCam = vcam.SelectedIndex > 0;
+                    if (S.VidCam) S.VidCamName = (string)vcam.SelectedItem;
+                }
+                S.KeepHistory = history.Checked;
                 S.SaveFolder = folder.Text.Trim().Length > 0 ? folder.Text.Trim() : S.SaveFolder;
                 S.Format = (string)format.SelectedItem;
                 S.QuickSave = quick.Checked;
@@ -1946,17 +2822,17 @@ namespace Capturo
                 S.Save();
                 DialogResult = DialogResult.OK;
             };
-            Deactivate += (s, e) => { hkCapture.StopRecording(); hkFull.StopRecording(); hkPin.StopRecording(); };
+            Deactivate += (s, e) => { hkCapture.StopRecording(); hkFull.StopRecording(); hkPin.StopRecording(); hkRepeat.StopRecording(); hkVideo.StopRecording(); };
             Shown += (s, e) => { Native.ForceForeground(Handle); cancel.Focus(); };
         }
 
         HotkeyBox AddHotkeyRow(GroupBox parent, string label, int y, Hotkey value)
         {
             parent.Controls.Add(new Label { Text = label, Location = P(14, y + 4), AutoSize = true });
-            var box = new HotkeyBox { Location = P(170, y), Width = D(214) };
+            var box = new HotkeyBox { Location = P(170, y), Width = D(200) };
             box.Value = value;
             box.Problem += msg => problem.Text = msg ?? "";
-            var clear = new Button { Text = "Limpar", Location = P(390, y - 1), Size = new Size(D(72), D(28)) };
+            var clear = new Button { Text = "Limpar", Location = P(376, y - 1), Size = new Size(D(68), D(28)) };
             clear.Click += (s, e) => { box.Value = new Hotkey(); problem.Text = ""; };
             parent.Controls.Add(box); parent.Controls.Add(clear);
             return box;
@@ -1984,7 +2860,9 @@ namespace Capturo
         int swallowUpVk = -1;
         OverlayForm overlay;
         string balloonTarget;
-        readonly ToolStripMenuItem historyMenu, miCapture, miFull, miPin, miClosePins;
+        readonly ToolStripMenuItem historyMenu, miCapture, miFull, miPin, miClosePins, miRepeat, miGif, miVideo, miSaved;
+        GalleryForm gallery;
+        CountdownForm countdown;
         readonly List<PinForm> pins = new List<PinForm>();
 
         public TrayApp()
@@ -2000,12 +2878,28 @@ namespace Capturo
             miPin = new ToolStripMenuItem("Capturar e fixar na tela", null, (s, e) => StartCapture(true));
             miFull = new ToolStripMenuItem("Salvar tela inteira", null, (s, e) => QuickFullScreen());
             miClosePins = new ToolStripMenuItem("Fechar imagens fixadas", null, (s, e) => { foreach (var p in pins.ToArray()) p.Close(); });
+            miRepeat = new ToolStripMenuItem("Repetir a última área", null, (s, e) => RepeatLastArea());
+            miGif = new ToolStripMenuItem("Gravar GIF de uma área", null, (s, e) => StartCapture(false, Rectangle.Empty, true));
+            miVideo = new ToolStripMenuItem("Gravar vídeo de uma área", null, (s, e) => StartCapture(false, Rectangle.Empty, false, true));
+            var miDelay = new ToolStripMenuItem("Capturar com atraso");
+            foreach (int sec in new[] { 3, 5, 10 })
+            {
+                int v = sec;
+                miDelay.DropDownItems.Add(v + " segundos", null, (s, e) => DelayedCapture(v));
+            }
             historyMenu = new ToolStripMenuItem("Envios recentes");
             menu.Items.Add(miCapture);
             menu.Items.Add(miPin);
+            menu.Items.Add(miRepeat);
+            menu.Items.Add(miDelay);
             menu.Items.Add(miFull);
+            menu.Items.Add(miVideo);
+            miSaved = new ToolStripMenuItem("Gravações não exportadas");
+            menu.Items.Add(miSaved);
+            menu.Items.Add(miGif);
             menu.Items.Add(miClosePins);
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Galeria de capturas...", null, (s, e) => ShowGallery());
             menu.Items.Add(historyMenu);
             menu.Items.Add("Abrir pasta de capturas", null, (s, e) => { Directory.CreateDirectory(S.SaveFolder); Services.Open(S.SaveFolder); });
             menu.Items.Add("Configurações...", null, (s, e) => ShowSettings());
@@ -2044,6 +2938,9 @@ namespace Capturo
             t2.IsBackground = true;
             t2.Start();
 
+            VideoRecorder.CleanOld();
+            idleTrim.Tick += (s2, e2) => TrimMemory();
+            ScheduleTrim();
             Notify("Capturo está rodando", S.CaptureKey.IsEmpty
                 ? "Clique no ícone da bandeja para capturar."
                 : "Pressione " + S.CaptureKey + " para capturar uma área.", null);
@@ -2060,6 +2957,21 @@ namespace Capturo
             miCapture.ShortcutKeyDisplayString = S.CaptureKey.IsEmpty ? "" : S.CaptureKey.ToString();
             miPin.ShortcutKeyDisplayString = S.PinKey.IsEmpty ? "" : S.PinKey.ToString();
             miFull.ShortcutKeyDisplayString = S.FullKey.IsEmpty ? "" : S.FullKey.ToString();
+            miRepeat.ShortcutKeyDisplayString = S.RepeatKey.IsEmpty ? "" : S.RepeatKey.ToString();
+            miRepeat.Enabled = !S.LastArea.IsEmpty;
+            miGif.Text = GifRecorder.Current != null ? "Parar a gravação do GIF" : "Gravar GIF de uma área";
+            miVideo.Text = VideoRecorder.Current != null ? "Parar a gravação do vídeo" : "Gravar vídeo de uma área";
+            miVideo.ShortcutKeyDisplayString = S.VideoKey.IsEmpty ? "" : S.VideoKey.ToString();
+            miSaved.DropDownItems.Clear();
+            foreach (var d in SavedRecordings())
+            {
+                string dir = d;
+                DateTime when;
+                string label = !DateTime.TryParseExact(Path.GetFileName(d), "yyyyMMdd_HHmmss", null, System.Globalization.DateTimeStyles.None, out when) ? Path.GetFileName(d)
+                    : when.Date == DateTime.Today ? "hoje, " + when.ToString("HH:mm") : when.Date == DateTime.Today.AddDays(-1) ? "ontem, " + when.ToString("HH:mm") : when.ToString("dd/MM, HH:mm");
+                miSaved.DropDownItems.Add("Gravação de " + label, null, (s, e) => OpenVideoEditor(dir));
+            }
+            miSaved.Visible = miSaved.DropDownItems.Count > 0;
             pins.RemoveAll(p => p.IsDisposed);
             miClosePins.Visible = pins.Count > 0;
             miClosePins.Text = "Fechar imagens fixadas (" + pins.Count + ")";
@@ -2089,6 +3001,8 @@ namespace Capturo
                         if (hk.Same(S.CaptureKey)) act = () => StartCapture(false);
                         else if (hk.Same(S.PinKey)) act = () => StartCapture(true);
                         else if (hk.Same(S.FullKey)) act = QuickFullScreen;
+                        else if (hk.Same(S.RepeatKey)) act = RepeatLastArea;
+                        else if (hk.Same(S.VideoKey)) act = () => StartCapture(false, Rectangle.Empty, false, true);
                         if (act != null) { invoker.BeginInvoke(act); return Swallow(hk); }
                     }
                 }
@@ -2108,8 +3022,16 @@ namespace Capturo
             return (IntPtr)1;
         }
 
-        public void StartCapture(bool pinMode)
+        public void StartCapture(bool pinMode) { StartCapture(pinMode, Rectangle.Empty, false); }
+
+        // preset: área já selecionada (coordenadas de tela). gif: Enter / duplo clique começam a gravar.
+        public void StartCapture(bool pinMode, Rectangle preset, bool gif) { StartCapture(pinMode, preset, gif, false); }
+
+        public void StartCapture(bool pinMode, Rectangle preset, bool gif, bool video)
         {
+            // durante a gravação, o atalho de captura (ou o ícone da bandeja) encerra o GIF ou o vídeo
+            if (GifRecorder.Current != null) { GifRecorder.Current.Stop(false); return; }
+            if (VideoRecorder.Current != null) { VideoRecorder.Current.Stop(false); return; }
             if (overlay != null && !overlay.IsDisposed) return;
             Rectangle vs;
             Bitmap shot;
@@ -2117,9 +3039,195 @@ namespace Capturo
             catch (Exception ex) { Notify("Erro na captura", ex.Message, null); return; }
             Log("captura " + vs + (pinMode ? " (fixar)" : ""));
             overlay = new OverlayForm(this, shot, vs, pinMode);
-            overlay.FormClosed += (s, e) => { overlay = null; };
+            overlay.GifMode = gif;
+            overlay.VideoMode = video;
+            if (!preset.IsEmpty) overlay.Preselect(preset);
+            overlay.FormClosed += (s, e) => { overlay = null; ScheduleTrim(); };
             overlay.Show();
         }
+
+        void RepeatLastArea()
+        {
+            if (S.LastArea.IsEmpty) { Notify("Nenhuma área ainda", "Faça uma captura primeiro; a área dela fica guardada.", null); return; }
+            StartCapture(false, S.LastArea, false);
+        }
+
+        void DelayedCapture(int seconds)
+        {
+            if (countdown != null && !countdown.IsDisposed) return;
+            countdown = new CountdownForm(seconds);
+            countdown.Done += () => { countdown = null; StartCapture(false); };
+            countdown.Show();
+        }
+
+        void ShowGallery()
+        {
+            if (gallery != null && !gallery.IsDisposed)
+            {
+                if (gallery.WindowState == FormWindowState.Minimized) gallery.WindowState = FormWindowState.Normal;
+                gallery.Activate();
+                return;
+            }
+            gallery = new GalleryForm(this);
+            gallery.FormClosed += (s, e) => gallery = null;
+            gallery.Show();
+        }
+
+        public void RunOnUi(Action a)
+        {
+            try { invoker.BeginInvoke(a); } catch { }
+        }
+
+        // A sobreposição acabou de fechar: espera um instante para ela sumir da tela antes de gravar.
+        public void StartRecording(Rectangle area)
+        {
+            var t = new System.Windows.Forms.Timer { Interval = 150 };
+            t.Tick += (s, e) => { t.Dispose(); GifRecorder.Start(this, area); };
+            t.Start();
+        }
+
+        public void StartVideo(Rectangle area) { StartVideo(area, IntPtr.Zero); }
+
+        // window: grava essa janela (Windows Graphics Capture) em vez do retângulo da tela
+        public void StartVideo(Rectangle area, IntPtr window)
+        {
+            // contagem regressiva (opcional) perto da área, depois começa
+            if (S.VidCountdown > 0)
+            {
+                if (countdown != null && !countdown.IsDisposed) return;
+                countdown = new CountdownForm(S.VidCountdown, "Gravando em", area);
+                countdown.Done += () => { countdown = null; VideoRecorder.Start(this, area, window); };
+                countdown.Show();
+                return;
+            }
+            var t = new System.Windows.Forms.Timer { Interval = 150 };
+            t.Tick += (s, e) => { t.Dispose(); VideoRecorder.Start(this, area, window); };
+            t.Start();
+        }
+
+        readonly List<VideoEditorForm> editors = new List<VideoEditorForm>();
+
+        // Gravações guardadas para abrir depois (fechou o editor sem exportar, ou o app fechou).
+        static List<string> SavedRecordings()
+        {
+            var list = new List<string>();
+            try
+            {
+                if (Directory.Exists(VideoRecorder.Root))
+                    foreach (var d in Directory.GetDirectories(VideoRecorder.Root))
+                        if (File.Exists(Path.Combine(d, "guardada.txt")) && File.Exists(Path.Combine(d, "sessao.txt"))) list.Add(d);
+            }
+            catch { }
+            list.Sort((a, b) => string.CompareOrdinal(b, a));
+            return list;
+        }
+
+        // Sem o editor: exporta direto em MP4 com o último estilo usado e copia o arquivo.
+        public void QuickExportVideo(string dir)
+        {
+            Notify("Gerando o vídeo...", "Usando o último estilo do editor.", null);
+            new Thread(() =>
+            {
+                string path = null, err = null;
+                try
+                {
+                    var p = VideoProject.Load(dir);
+                    p.Style.Format = 0;
+                    path = Services.UniquePath(S.SaveFolder, "mp4");
+                    try { VideoExport.Mp4(p, path, f => { }, () => false); }
+                    finally { p.Dispose(); }
+                }
+                catch (Exception ex) { err = ex.Message; Log("exportar vídeo: " + ex); }
+                RunOnUi(() =>
+                {
+                    if (err != null)
+                    {
+                        // não perde a gravação: fica guardada para abrir no editor
+                        try { File.WriteAllText(Path.Combine(dir, "guardada.txt"), DateTime.Now.ToString("s")); } catch { }
+                        Notify("Erro ao gerar o vídeo", err + " A gravação ficou guardada (bandeja → Gravações não exportadas).", null);
+                        return;
+                    }
+                    try { Directory.Delete(dir, true); } catch { }
+                    GifSaved(path, 0);
+                });
+            }) { IsBackground = true }.Start();
+        }
+
+        public void OpenVideoEditor(string dir)
+        {
+            try { File.Delete(Path.Combine(dir, "guardada.txt")); } catch { }
+            VideoEditorForm f;
+            try { f = new VideoEditorForm(this, dir); }
+            catch (Exception ex) { Log("editor de vídeo: " + ex); Notify("Não foi possível abrir o editor", ex.Message, null); return; }
+            editors.Add(f);
+            f.FormClosed += (s, e) => { editors.Remove(f); ScheduleTrim(); };
+            f.Show();
+        }
+
+        public void GifSaved(string path, long ms)
+        {
+            long kb = 0;
+            try { kb = new FileInfo(path).Length / 1024; } catch { }
+            try
+            {
+                var files = new System.Collections.Specialized.StringCollection();
+                files.Add(path);
+                Clipboard.SetFileDropList(files);   // cola como arquivo no chat, e-mail ou Explorer
+            }
+            catch { }
+            string size = kb > 2048 ? (kb / 1024.0).ToString("0.0") + " MB" : kb + " KB";
+            bool video = path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase);
+            Notify((video ? "Vídeo salvo · " : "GIF salvo · ") + (ms > 0 ? (ms / 1000.0).ToString("0.0") + " s · " : "") + size,
+                "O arquivo foi copiado: é só colar no chat ou no e-mail. Clique para abrir.", path);
+        }
+
+        // Reconhece o texto da imagem: a janela abre na hora, com a imagem, e o texto chega em seguida.
+        // A janela fica com a imagem (e a descarta ao fechar).
+        // ---- libera buffers de desenho ociosos sem forçar pausas de GC ou paginação
+        readonly System.Windows.Forms.Timer idleTrim = new System.Windows.Forms.Timer { Interval = 20000 };
+
+        public void ScheduleTrim() { idleTrim.Stop(); idleTrim.Start(); }
+
+        void TrimMemory()
+        {
+            idleTrim.Stop();
+            // ocupado (capturando, gravando, editando): tenta de novo mais tarde
+            if ((overlay != null && !overlay.IsDisposed) || VideoRecorder.Current != null || GifRecorder.Current != null || editors.Count > 0) { idleTrim.Start(); return; }
+            BufferedGraphicsManager.Current.Invalidate();
+            // O GC gerencia o heap. Coletas forçadas e esvaziar o working set
+            // bloqueavam a interface e traziam páginas de volta no próximo uso.
+        }
+
+        public void CopyText(Bitmap bmp)
+        {
+            var form = new OcrTextForm(bmp);
+            form.FormClosed += (s, e) => ScheduleTrim();
+            form.LanguageRequested += lang => { form.SetReading(lang); ReadText(form, bmp, lang); };
+            form.Show();
+            Native.ForceForeground(form.Handle);
+            ReadText(form, bmp, null);
+        }
+
+        void ReadText(OcrTextForm form, Bitmap bmp, string lang)
+        {
+            Bitmap copy;
+            lock (bmp) copy = new Bitmap(bmp);   // a janela continua desenhando a original
+            new Thread(() =>
+            {
+                OcrDoc doc = null; string err = null;
+                try { doc = RunOcr(copy, lang); }
+                catch (Exception ex) { err = ex is TypeLoadException || ex is FileNotFoundException ? "Este Windows não tem o reconhecimento de texto (requer Windows 10 ou 11)." : ex.Message; }
+                finally { copy.Dispose(); }
+                RunOnUi(() =>
+                {
+                    if (form.IsDisposed) return;
+                    if (err != null) form.SetError(err); else form.SetResult(doc);
+                });
+            }) { IsBackground = true, Name = "ocr" }.Start();
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        static OcrDoc RunOcr(Bitmap b, string lang) { return Ocr.Read(b, lang); }
 
         void QuickFullScreen()
         {
@@ -2143,7 +3251,7 @@ namespace Capturo
         {
             var f = new PinForm(this, bmp, screenLoc);
             pins.Add(f);
-            f.FormClosed += (s, e) => pins.Remove(f);
+            f.FormClosed += (s, e) => { pins.Remove(f); ScheduleTrim(); };
             f.Show();
             Native.ForceForeground(f.Handle);
         }
@@ -2274,6 +3382,10 @@ namespace Capturo
         protected override void ExitThreadCore()
         {
             if (hook != IntPtr.Zero) Native.UnhookWindowsHookEx(hook);
+            if (GifRecorder.Current != null) GifRecorder.Current.Stop(true);
+            if (VideoRecorder.Current != null) VideoRecorder.Current.Stop(true);
+            foreach (var ed in editors.ToArray()) { ed.Quiet = true; ed.Close(); }
+            S.Save();
             foreach (var p in pins.ToArray()) p.Close();
             tray.Visible = false;
             tray.Dispose();
@@ -2310,6 +3422,9 @@ namespace Capturo
                 }
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
+                // janelas com buffer duplo (prévia e linha do tempo do editor, galeria...) reaproveitam o buffer
+                // em vez de criar um novo a cada redesenho; ele é liberado quando o app fica ocioso
+                BufferedGraphicsManager.Current.MaximumBuffer = new Size(2560, 1600);
                 Application.ThreadException += (s, e) => { TrayApp.Log(e.Exception.ToString()); MessageBox.Show(e.Exception.ToString(), "Capturo - erro"); };
                 Application.Run(new TrayApp());
             }
