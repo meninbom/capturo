@@ -192,6 +192,7 @@ namespace Capturo
         public bool OpenAfterUpload = true;
         public int ColorArgb = Color.FromArgb(255, 235, 30, 50).ToArgb();
         public int Thickness = 3;
+        public string ToolSizes = "";                                // tamanho de cada ferramenta: "1:3,3:5,10:6"
         public int IconScale = 100;                                  // % do tamanho das barras de ferramentas
         public Hotkey CaptureKey = new Hotkey(0, 0x2C);              // Print Screen
         public Hotkey FullKey = new Hotkey(Hotkey.Shift, 0x2C);      // Shift + Print Screen
@@ -237,6 +238,7 @@ namespace Capturo
                             case "OpenAfterUpload": s.OpenAfterUpload = v == "1"; break;
                             case "Color": int c; if (int.TryParse(v, out c)) s.ColorArgb = c; break;
                             case "Thickness": int t; if (int.TryParse(v, out t)) s.Thickness = Math.Max(1, Math.Min(20, t)); break;
+                            case "ToolSizes": s.ToolSizes = v; break;
                             case "IconScale": int z; if (int.TryParse(v, out z)) s.IconScale = Math.Max(MinIcon, Math.Min(MaxIcon, z)); break;
                             case "CaptureKey": s.CaptureKey = Hotkey.Parse(v, s.CaptureKey); break;
                             case "FullKey": s.FullKey = Hotkey.Parse(v, s.FullKey); break;
@@ -282,6 +284,7 @@ namespace Capturo
                 sb.AppendLine("OpenAfterUpload=" + (OpenAfterUpload ? "1" : "0"));
                 sb.AppendLine("Color=" + ColorArgb);
                 sb.AppendLine("Thickness=" + Thickness);
+                sb.AppendLine("ToolSizes=" + ToolSizes);
                 sb.AppendLine("IconScale=" + IconScale);
                 sb.AppendLine("CaptureKey=" + CaptureKey.Serialize());
                 sb.AppendLine("FullKey=" + FullKey.Serialize());
@@ -999,6 +1002,11 @@ namespace Capturo
         // paleta rápida
         bool paletteOpen; Rectangle paletteRect, moreRect; readonly Rectangle[] swatchRects = new Rectangle[Art.Palette.Length];
         int hoverSwatch = -1; bool hoverMore;
+        // tamanho (espessura) no painel de cores: controle deslizante de 1 a 20
+        const int MinThick = 1, MaxThick = 20;
+        Rectangle sizeTrack, sizeLabel; bool sizeDrag, hoverSize;
+        // cada ferramenta lembra o próprio tamanho (números, seta, lápis...)
+        readonly Dictionary<Tool, int> toolThick = new Dictionary<Tool, int>();
         readonly Font fontUi, fontUiB, fontSmall;
         // janelas visíveis no momento da captura (coordenadas do cliente, da frente para trás)
         readonly List<Rectangle> windows = new List<Rectangle>();
@@ -1012,6 +1020,13 @@ namespace Capturo
             this.app = app; this.shot = shot; this.vs = vs; this.pinMode = pinMode;
             color = Color.FromArgb(TrayApp.S.ColorArgb);
             thick = TrayApp.S.Thickness;
+            foreach (var part in (TrayApp.S.ToolSizes ?? "").Split(','))
+            {
+                var kv = part.Split(':');
+                int k, v;
+                if (kv.Length == 2 && int.TryParse(kv[0], out k) && int.TryParse(kv[1], out v) && Enum.IsDefined(typeof(Tool), k))
+                    toolThick[(Tool)k] = Math.Max(MinThick, Math.Min(MaxThick, v));
+            }
 
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
@@ -1083,6 +1098,9 @@ namespace Capturo
             timer.Dispose();
             TrayApp.S.ColorArgb = color.ToArgb();
             TrayApp.S.Thickness = thick;
+            var sizes = new List<string>();
+            foreach (var kv in toolThick) sizes.Add((int)kv.Key + ":" + kv.Value);
+            TrayApp.S.ToolSizes = string.Join(",", sizes.ToArray());
             TrayApp.S.Save();
             foreach (var a in annots) a.DisposeCache();
             shot.Dispose(); dim.Dispose(); bufCtx.Dispose();
@@ -1103,7 +1121,7 @@ namespace Capturo
             switch (id)
             {
                 case 1: return "Lápis"; case 2: return "Linha"; case 3: return "Seta"; case 4: return "Retângulo";
-                case 5: return "Marcador"; case 6: return "Texto"; case 7: return "Cor"; case 8: return "Desfazer";
+                case 5: return "Marcador"; case 6: return "Texto"; case 7: return "Cor e tamanho"; case 8: return "Desfazer";
                 case 9: return "Pixelar"; case 10: return "Numeração";
                 case 11: return "Elipse"; case 12: return "Destaque (escurece o resto)"; case 13: return "Mover e editar anotações";
                 case 28: return "Gravar GIF da área"; case 29: return "Selecionar texto na imagem (OCR)"; case 30: return "Moldura com sombra";
@@ -1181,8 +1199,8 @@ namespace Capturo
             var cb = btns.Find(btn => btn.Id == 7);
             if (cb == null) { paletteOpen = false; return; }
             int sw = S(24), g = S(8), cols = 5;
-            int moreH = S(26);
-            int w = cols * sw + (cols + 1) * g, h = 2 * sw + 3 * g + moreH;
+            int moreH = S(26), sizeH = S(50);
+            int w = cols * sw + (cols + 1) * g, h = 2 * sw + 3 * g + moreH + sizeH;
             int x = toolPanel.Right + S(8);
             if (x + w > ClientSize.Width) x = toolPanel.Left - S(8) - w;
             int y = Math.Max(0, Math.Min(cb.R.Top - g, ClientSize.Height - h));
@@ -1190,6 +1208,41 @@ namespace Capturo
             for (int i = 0; i < Art.Palette.Length; i++)
                 swatchRects[i] = new Rectangle(x + g + (i % cols) * (sw + g), y + g + (i / cols) * (sw + g), sw, sw);
             moreRect = new Rectangle(x + g, y + 2 * sw + 3 * g - S(2), w - 2 * g, moreH - S(4));
+            int sy = moreRect.Bottom + S(8);
+            sizeLabel = new Rectangle(x + g, sy, w - 2 * g, S(18));
+            sizeTrack = new Rectangle(x + g + S(4), sizeLabel.Bottom + S(2), w - 2 * g - S(8), S(18));
+        }
+
+        // ---------- tamanho (espessura) por ferramenta
+        int ThickFor(Tool t)
+        {
+            int v;
+            return toolThick.TryGetValue(t, out v) ? v : TrayApp.S.Thickness;
+        }
+
+        // tamanho mostrado no painel: o do objeto selecionado, senão o da ferramenta atual
+        int ShownThick { get { return picked != null ? Math.Max(MinThick, Math.Min(MaxThick, (int)Math.Round(picked.Width))) : editingText != null ? (int)editingText.Width : thick; } }
+
+        void SetThick(int v, bool snapshot)
+        {
+            v = Math.Max(MinThick, Math.Min(MaxThick, v));
+            thick = v;
+            Tool t = editingText != null ? Tool.Text : picked != null ? picked.Kind : tool;
+            if (t != Tool.None) toolThick[t] = v;
+            else TrayApp.S.Thickness = v;
+            if (editingText != null) editingText.Width = v;
+            else if (picked != null && picked.Width != v)
+            {
+                if (snapshot) Snapshot();
+                picked.Width = v; picked.DisposeCache();
+            }
+            Invalidate();
+        }
+
+        int ThickAt(int x)
+        {
+            float f = (x - sizeTrack.Left) / (float)Math.Max(1, sizeTrack.Width);
+            return MinThick + (int)Math.Round(Math.Max(0, Math.Min(1, f)) * (MaxThick - MinThick));
         }
 
         Btn HitBtn(Point p)
@@ -1341,7 +1394,9 @@ namespace Capturo
                 {
                     for (int i = 0; i < swatchRects.Length; i++)
                         if (swatchRects[i].Contains(p)) { SetColor(Art.Palette[i]); paletteOpen = false; Invalidate(); return; }
-                    if (moreRect.Contains(p)) { paletteOpen = false; PickColorDialog(); }
+                    if (moreRect.Contains(p)) { paletteOpen = false; PickColorDialog(); return; }
+                    var hitTrack = sizeTrack; hitTrack.Inflate(S(6), S(6));
+                    if (hitTrack.Contains(p)) { sizeDrag = true; SetThick(ThickAt(p.X), true); }
                     return;
                 }
                 paletteOpen = false; Invalidate();
@@ -1501,16 +1556,18 @@ namespace Capturo
                 case Drag.None:
                     {
                         var bt = HitBtn(p);
-                        int sw = -1; bool more = false;
+                        if (sizeDrag) { if (ThickAt(p.X) != thick) SetThick(ThickAt(p.X), false); Cursor = Cursors.Hand; return; }
+                        int sw = -1; bool more = false, onSize = false;
                         if (paletteOpen)
                         {
                             for (int i = 0; i < swatchRects.Length; i++) if (swatchRects[i].Contains(p)) sw = i;
                             more = moreRect.Contains(p);
+                            var ht = sizeTrack; ht.Inflate(S(6), S(6)); onSize = ht.Contains(p);
                         }
-                        bool changed = bt != hover || sw != hoverSwatch || more != hoverMore;
-                        hover = bt; hoverSwatch = sw; hoverMore = more;
+                        bool changed = bt != hover || sw != hoverSwatch || more != hoverMore || onSize != hoverSize;
+                        hover = bt; hoverSwatch = sw; hoverMore = more; hoverSize = onSize;
                         int h = HitHandle(p);
-                        if (bt != null || sw >= 0 || more) Cursor = Cursors.Hand;
+                        if (bt != null || sw >= 0 || more || onSize) Cursor = Cursors.Hand;
                         else if (paletteOpen && paletteRect.Contains(p)) Cursor = Cursors.Default;
                         else if (h >= 0) Cursor = HandleCursors[h];
                         else if (hasSel && sel.Contains(p) && textMode)
@@ -1559,6 +1616,7 @@ namespace Capturo
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
+            if (sizeDrag) { sizeDrag = false; Invalidate(); return; }
             if (liveDrag) { liveDrag = false; live.MouseUp(); return; }
             if (drag == Drag.NewSel && (sel.Width < 3 || sel.Height < 3))
             {
@@ -1590,10 +1648,8 @@ namespace Capturo
         protected override void OnMouseWheel(MouseEventArgs e)
         {
             base.OnMouseWheel(e);
-            thick = Math.Max(1, Math.Min(20, thick + (e.Delta > 0 ? 1 : -1)));
-            if (editingText != null) editingText.Width = thick;
-            else if (picked != null) { Snapshot(); picked.Width = thick; }
-            Flash("Espessura  " + thick);
+            SetThick(ShownThick + (e.Delta > 0 ? 1 : -1), true);
+            Flash("Tamanho  " + thick);
         }
 
         // ---------- teclado
@@ -1917,6 +1973,7 @@ namespace Capturo
             FinishText();
             picked = null;
             tool = tool == t ? Tool.None : t;
+            if (tool != Tool.None) thick = ThickFor(tool);   // cada ferramenta volta com o próprio tamanho
             Invalidate();
         }
 
@@ -2363,6 +2420,42 @@ namespace Capturo
             using (var ink = new SolidBrush(Art.Ink))
             using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
                 g.DrawString("Mais cores…", fontUi, ink, moreRect, sf);
+            DrawSizeSlider(g);
+        }
+
+        void DrawSizeSlider(Graphics g)
+        {
+            var oldSmooth = g.SmoothingMode;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var line = new Pen(Color.FromArgb(230, 230, 236), 1))
+                g.DrawLine(line, paletteRect.Left + S(8), sizeLabel.Top - S(5), paletteRect.Right - S(8), sizeLabel.Top - S(5));
+
+            int v = ShownThick;
+            using (var ink = new SolidBrush(Art.Ink))
+            using (var grey = new SolidBrush(Color.FromArgb(120, 120, 130)))
+            using (var left = new StringFormat { Alignment = StringAlignment.Near, LineAlignment = StringAlignment.Center })
+            using (var right = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Center })
+            {
+                g.DrawString("Tamanho", fontUi, ink, sizeLabel, left);
+                g.DrawString(v.ToString(), fontUiB, grey, sizeLabel, right);
+            }
+
+            float cy = sizeTrack.Top + sizeTrack.Height / 2f;
+            float f = (v - MinThick) / (float)(MaxThick - MinThick);
+            float tx = sizeTrack.Left + f * sizeTrack.Width;
+            // trilho afinando para a esquerda: dá a ideia de fino → grosso
+            using (var track = new SolidBrush(Color.FromArgb(225, 225, 232)))
+                g.FillPolygon(track, new[] { new PointF(sizeTrack.Left, cy - 1), new PointF(sizeTrack.Right, cy - S(4)), new PointF(sizeTrack.Right, cy + S(4)), new PointF(sizeTrack.Left, cy + 1) });
+            using (var fill = new SolidBrush(color))
+            {
+                float hw = 1 + f * (S(4) - 1);
+                g.FillPolygon(fill, new[] { new PointF(sizeTrack.Left, cy - 1), new PointF(tx, cy - hw), new PointF(tx, cy + hw), new PointF(sizeTrack.Left, cy + 1) });
+            }
+            float r = (sizeDrag || hoverSize) ? S(8) : S(7);
+            using (var sh = new SolidBrush(Color.FromArgb(50, 0, 0, 0))) g.FillEllipse(sh, tx - r, cy - r + 1, 2 * r, 2 * r);
+            using (var w = new SolidBrush(Color.White)) g.FillEllipse(w, tx - r, cy - r, 2 * r, 2 * r);
+            using (var bp = new Pen(Art.Accent, 2 * scale)) g.DrawEllipse(bp, tx - r, cy - r, 2 * r, 2 * r);
+            g.SmoothingMode = oldSmooth;
         }
     }
 

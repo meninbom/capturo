@@ -56,7 +56,7 @@ Teclas comuns (letras, números) exigem Ctrl, Alt, Shift ou Win. F1–F24, Print
 | Mover e editar anotações (clique para selecionar e arraste; Del apaga; a cor e a roda do mouse mudam a anotação selecionada; duplo clique num texto volta a editar) | V |
 | Moldura com sombra na imagem final (liga/desliga e fica lembrado) | F |
 | Paleta de cores | C |
-| Espessura do traço/fonte | roda do mouse |
+| Tamanho (espessura do traço e da seta, tamanho do texto e dos números). Cada ferramenta guarda o seu | roda do mouse, ou o controle **Tamanho** no painel de cores (C) |
 | Linha a 45° / quadrado | segurar Shift ao desenhar |
 | Desfazer / Refazer | Ctrl+Z / Ctrl+Y |
 | Copiar | Ctrl+C, Enter ou duplo clique |
