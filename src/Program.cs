@@ -1,4 +1,4 @@
-﻿// Capturo - ferramenta de captura de tela no estilo Lightshot.
+// Capturo - ferramenta de captura de tela no estilo Lightshot.
 // Compila com o csc.exe do .NET Framework 4.x (C# 5), sem dependências externas.
 using System;
 using System.Collections.Generic;
@@ -1167,12 +1167,16 @@ namespace Capturo
             }
         }
 
-        public OverlayForm(TrayApp app, Bitmap shot, Rectangle vs, bool pinMode) : this(app, shot, vs, pinMode, false) { }
+        public OverlayForm(TrayApp app, Bitmap shot, Rectangle vs, bool pinMode) : this(app, () => shot, vs, pinMode, false) { }
 
         // doc: shot é uma imagem pronta para editar (print com rolagem) e vs o monitor onde a janela abre.
-        public OverlayForm(TrayApp app, Bitmap shot, Rectangle vs, bool pinMode, bool doc)
+        public OverlayForm(TrayApp app, Bitmap shot, Rectangle vs, bool pinMode, bool doc) : this(app, () => shot, vs, pinMode, doc) { }
+
+        // takeShot: entrega o print. Ele é pedido só depois de a janela (ainda invisível) ser criada,
+        // então a captura da tela pode correr numa thread enquanto isso.
+        public OverlayForm(TrayApp app, Func<Bitmap> takeShot, Rectangle vs, bool pinMode, bool doc)
         {
-            this.app = app; this.shot = shot; this.vs = vs; this.pinMode = pinMode; docMode = doc;
+            this.app = app; this.vs = vs; this.pinMode = pinMode; docMode = doc;
             color = Color.FromArgb(TrayApp.S.ColorArgb);
             thick = TrayApp.S.Thickness;
             foreach (var part in (TrayApp.S.ToolSizes ?? "").Split(','))
@@ -1200,22 +1204,6 @@ namespace Capturo
             fontUiB = new Font("Segoe UI Semibold", 12 * scale, FontStyle.Regular, GraphicsUnit.Pixel);
             fontSmall = new Font("Consolas", 11 * scale, FontStyle.Regular, GraphicsUnit.Pixel);
 
-            if (docMode)
-            {
-                sel = new Rectangle(0, 0, shot.Width, shot.Height); hasSel = true;
-                Cursor = Cursors.Default;
-                docHintUntil = DateTime.Now.AddSeconds(6);
-            }
-            else
-            {
-                dim = new Bitmap(shot.Width, shot.Height, PixelFormat.Format32bppPArgb);
-                using (var g = Graphics.FromImage(dim))
-                {
-                    g.DrawImage(shot, new Rectangle(0, 0, shot.Width, shot.Height), 0, 0, shot.Width, shot.Height, GraphicsUnit.Pixel);
-                    using (var br = new SolidBrush(Color.FromArgb(120, 8, 8, 16))) g.FillRectangle(br, 0, 0, shot.Width, shot.Height);
-                }
-            }
-
             if (!docMode) try
             {
                 List<IntPtr> hs;
@@ -1223,11 +1211,22 @@ namespace Capturo
                 for (int i = 0; i < rects.Count; i++)
                 {
                     var c = rects[i]; c.Offset(-vs.X, -vs.Y);
-                    c.Intersect(new Rectangle(0, 0, shot.Width, shot.Height));
+                    c.Intersect(new Rectangle(0, 0, vs.Width, vs.Height));
                     if (c.Width >= 20 && c.Height >= 20) { windows.Add(c); windowHandles.Add(hs[i]); }
                 }
             }
             catch { }
+
+            try { shot = takeShot(); }
+            catch { Dispose(); throw; }
+
+            if (docMode)
+            {
+                sel = new Rectangle(0, 0, shot.Width, shot.Height); hasSel = true;
+                Cursor = Cursors.Default;
+                docHintUntil = DateTime.Now.AddSeconds(6);
+            }
+            else dim = Dimmed(shot);
 
             timer.Interval = 500;
             timer.Tick += (s, e) =>
@@ -1241,9 +1240,87 @@ namespace Capturo
 
         int S(float v) { return (int)Math.Round(v * scale); }
 
+        // O print escurecido do fundo: o mesmo que pintar Color.FromArgb(120, 8, 8, 16) por cima,
+        // feito em paralelo (o GDI+ levava ~20 ms na tela virtual de dois monitores).
+        static unsafe Bitmap Dimmed(Bitmap shot)
+        {
+            int w = shot.Width, h = shot.Height;
+            var dim = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+            var rect = new Rectangle(0, 0, w, h);
+            var s = shot.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+            try
+            {
+                var d = dim.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+                try
+                {
+                    IntPtr s0 = s.Scan0, d0 = d.Scan0;
+                    int ss = s.Stride, ds = d.Stride;
+                    const uint A = 120, K = 255 - A;
+                    System.Threading.Tasks.Parallel.For(0, h, y =>
+                    {
+                        uint* ps = (uint*)((byte*)s0 + (long)y * ss), pd = (uint*)((byte*)d0 + (long)y * ds);
+                        for (int x = 0; x < w; x++)
+                        {
+                            uint c = ps[x];
+                            uint b = ((c & 0xFF) * K + 16 * A + 127) / 255;
+                            uint g = (((c >> 8) & 0xFF) * K + 8 * A + 127) / 255;
+                            uint r = (((c >> 16) & 0xFF) * K + 8 * A + 127) / 255;
+                            pd[x] = 0xFF000000u | (r << 16) | (g << 8) | b;
+                        }
+                    });
+                }
+                finally { dim.UnlockBits(d); }
+            }
+            finally { shot.UnlockBits(s); }
+            return dim;
+        }
+
+        [DllImport("user32.dll")] static extern int GetUpdateRgn(IntPtr hWnd, IntPtr hRgn, bool erase);
+        [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
+        [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr h);
+        [DllImport("gdi32.dll")] static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, int rop);
+
+        // Região que o WM_PAINT atual precisa redesenhar. O ClipRectangle do WinForms é só o retângulo
+        // que a envolve: as duas faixas da mira já cobrem a tela virtual inteira (3840x1080 a cada movimento).
+        Region paintRegion;
+        Rectangle[] paintRects;
+
+        // Copia a imagem em r só nos retângulos que o WM_PAINT atual redesenha: com uma região de
+        // várias faixas, o GDI+ percorreria o retângulo envolvente inteiro (a tela toda).
+        void BlitImage(Graphics g, Bitmap img, Rectangle r)
+        {
+            if (paintRects == null) { g.DrawImage(img, r, r, GraphicsUnit.Pixel); return; }
+            foreach (var pr in paintRects)
+            {
+                var x = Rectangle.Intersect(pr, r);
+                if (x.Width > 0 && x.Height > 0) g.DrawImage(img, x, x, GraphicsUnit.Pixel);
+            }
+        }
+
         protected override void WndProc(ref Message m)
         {
             if (m.Msg == 0x02E0) return; // WM_DPICHANGED: a janela cobre todos os monitores, não redimensionar
+            if (m.Msg == 0x000F)
+            {
+                IntPtr rgn = CreateRectRgn(0, 0, 0, 0);
+                try
+                {
+                    if (GetUpdateRgn(Handle, rgn, false) == 3 /*COMPLEXREGION*/)
+                    {
+                        paintRegion = Region.FromHrgn(rgn);
+                        using (var id = new Matrix())
+                        {
+                            var scans = paintRegion.GetRegionScans(id);
+                            paintRects = new Rectangle[scans.Length];
+                            for (int i = 0; i < scans.Length; i++) paintRects[i] = Rectangle.Round(scans[i]);
+                        }
+                    }
+                }
+                finally { DeleteObject(rgn); }
+                try { base.WndProc(ref m); }
+                finally { if (paintRegion != null) { paintRegion.Dispose(); paintRegion = null; } paintRects = null; }
+                return;
+            }
             base.WndProc(ref m);
         }
 
@@ -1760,12 +1837,13 @@ namespace Capturo
 
                         if (!hasSel)
                         {
+                            // redesenha só o que muda: mira, lupa, a janela destacada e o aviso do monitor
                             var w = HitWindow(c);
-                            if (w != hoverWin) { hoverWin = w; Invalidate(); return; }
-                            // redesenha só a mira e a lupa (muito mais leve em telas grandes)
+                            if (w != hoverWin) { Invalidate(HoverArea(hoverWin)); hoverWin = w; Invalidate(HoverArea(w)); }
                             InvalidateCrosshair(old);
                             InvalidateCrosshair(c);
-                            if (MonitorAt(old) != MonitorAt(c)) Invalidate();
+                            Rectangle mo = MonitorAt(old), mc = MonitorAt(c);
+                            if (mo != mc) { InvalidateHint(mo); InvalidateHint(mc); }
                             return;
                         }
                         if (!changed) return;
@@ -1780,6 +1858,40 @@ namespace Capturo
             Invalidate(new Rectangle(0, p.Y - 2, ClientSize.Width, 5));
             Invalidate(new Rectangle(p.X - 2, 0, 5, ClientSize.Height));
             Invalidate(LoupeBounds(p));
+        }
+
+        // Faixas do aviso em pílula (no alto e embaixo do monitor, com a sombra).
+        void InvalidateHint(Rectangle mon)
+        {
+            int h = S(36), m = S(12);
+            Invalidate(new Rectangle(mon.X, mon.Y + S(24) - m, mon.Width, h + 2 * m));
+            Invalidate(new Rectangle(mon.X, mon.Bottom - S(96) - h - m, mon.Width, h + 2 * m));
+        }
+
+        // Área da janela destacada sob o mouse, incluindo a pílula com o nome e as medidas.
+        Rectangle HoverArea(Rectangle r)
+        {
+            if (r.Width <= 0 || r.Height <= 0) return Rectangle.Empty;
+            using (var g = CreateGraphics())
+            {
+                g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                var a = Rectangle.Union(r, PillRect(g, HoverText(r), HoverPillAt(r), fontUiB));
+                a.Inflate(S(4), S(4));
+                return a;
+            }
+        }
+
+        string HoverText(Rectangle r)
+        {
+            return RecMode ? TargetLabel(r) + "  ·  " + r.Width + " × " + r.Height : r.Width + " × " + r.Height;
+        }
+
+        Point HoverPillAt(Rectangle r)
+        {
+            if (!RecMode) return new Point(r.X + S(8), r.Y + S(8));
+            // gravação: acima da borda quando cabe; senão, por dentro
+            int pillH = fontUiB.Height + S(8);
+            return new Point(r.X + S(6), r.Y - pillH - S(6) >= MonitorAt(r.Location).Y ? r.Y - pillH - S(6) : r.Y + S(8));
         }
 
         static PointF Constrain(PointF a, PointF b, bool square)
@@ -2380,9 +2492,19 @@ namespace Capturo
             bufCtx.MaximumBuffer = new Size(ClientSize.Width + 1, ClientSize.Height + 1);
             using (var bg = bufCtx.Allocate(e.Graphics, ClientRectangle))
             {
-                bg.Graphics.SetClip(e.ClipRectangle);
+                if (paintRegion != null) bg.Graphics.Clip = paintRegion;
+                else bg.Graphics.SetClip(e.ClipRectangle);
                 PaintCore(new PaintEventArgs(bg.Graphics, e.ClipRectangle));
-                bg.Render(e.Graphics);
+                if (paintRects == null) { bg.Render(e.Graphics); return; }
+                // Render copiaria o buffer inteiro; aqui vão só as faixas que mudaram
+                IntPtr dst = e.Graphics.GetHdc();
+                try
+                {
+                    IntPtr src = bg.Graphics.GetHdc();
+                    try { foreach (var r in paintRects) BitBlt(dst, r.X, r.Y, r.Width, r.Height, src, r.X, r.Y, 0x00CC0020 /*SRCCOPY*/); }
+                    finally { bg.Graphics.ReleaseHdc(src); }
+                }
+                finally { e.Graphics.ReleaseHdc(dst); }
             }
         }
 
@@ -2408,7 +2530,7 @@ namespace Capturo
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             var st = g.Save();
             g.TranslateTransform(view.X, view.Y);
-            g.SetClip(sel);
+            g.SetClip(sel, CombineMode.Intersect);
             DrawAnnots(g, sel, true);
             g.Restore(st);
 
@@ -2452,8 +2574,8 @@ namespace Capturo
             g.CompositingMode = CompositingMode.SourceCopy;
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
             g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.DrawImage(dim, full, full, GraphicsUnit.Pixel);
-            if (hasSel && sel.Width > 0 && sel.Height > 0) g.DrawImage(shot, sel, sel, GraphicsUnit.Pixel);
+            BlitImage(g, dim, full);
+            if (hasSel && sel.Width > 0 && sel.Height > 0) BlitImage(g, shot, sel);
             g.CompositingMode = CompositingMode.SourceOver;
             g.PixelOffsetMode = PixelOffsetMode.Default;
             g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -2476,7 +2598,7 @@ namespace Capturo
 
             // anotações (recortadas à seleção)
             var st = g.Save();
-            g.SetClip(sel);
+            g.SetClip(sel, CombineMode.Intersect);
             DrawAnnots(g, sel, true);
             if (textMode && sel == liveSel) live.Paint(g, !live.HasSelection);
             g.Restore(st);
@@ -2539,15 +2661,14 @@ namespace Capturo
             g.CompositingMode = CompositingMode.SourceCopy;
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
             g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.DrawImage(shot, r, r, GraphicsUnit.Pixel);
+            BlitImage(g, shot, r);
             g.CompositingMode = CompositingMode.SourceOver;
             g.PixelOffsetMode = PixelOffsetMode.Default;
             g.SmoothingMode = SmoothingMode.None;
             float w = Math.Max(2, 2 * scale);
             using (var pen = new Pen(Art.Accent, w)) { pen.Alignment = PenAlignment.Inset; g.DrawRectangle(pen, r.X, r.Y, r.Width, r.Height); }
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            var at = new Point(r.X + S(8), r.Y + S(8));
-            DrawPill(g, r.Width + " × " + r.Height, at, fontUiB, Art.Accent, Color.White);
+            DrawPill(g, HoverText(r), HoverPillAt(r), fontUiB, Art.Accent, Color.White);
         }
 
         void DrawCrosshair(Graphics g, Point p)
@@ -2594,7 +2715,7 @@ namespace Capturo
             g.CompositingMode = CompositingMode.SourceCopy;
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
             g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.DrawImage(shot, r, r, GraphicsUnit.Pixel);
+            BlitImage(g, shot, r);
             g.CompositingMode = CompositingMode.SourceOver;
             g.PixelOffsetMode = PixelOffsetMode.Default;
             using (var tint = new SolidBrush(Color.FromArgb(40, Art.PickBlue))) g.FillRectangle(tint, r);
@@ -2602,11 +2723,7 @@ namespace Capturo
             float w = Math.Max(2, 2 * scale);
             using (var pen = new Pen(Art.PickBlue, w)) { pen.Alignment = PenAlignment.Inset; g.DrawRectangle(pen, r.X, r.Y, r.Width, r.Height); }
             g.SmoothingMode = SmoothingMode.AntiAlias;
-            string text = TargetLabel(r) + "  ·  " + r.Width + " × " + r.Height;
-            int pillH = fontUiB.Height + S(8);
-            // acima da borda quando cabe; senão, por dentro
-            var at = new Point(r.X + S(6), r.Y - pillH - S(6) >= MonitorAt(r.Location).Y ? r.Y - pillH - S(6) : r.Y + S(8));
-            DrawPill(g, text, at, fontUiB, Art.PickBlue, Color.White);
+            DrawPill(g, HoverText(r), HoverPillAt(r), fontUiB, Art.PickBlue, Color.White);
         }
 
         void DrawRecHint(Graphics g)
@@ -2666,7 +2783,7 @@ namespace Capturo
                 }
         }
 
-        Rectangle DrawPill(Graphics g, string text, Point at, Font f, Color bg, Color fg)
+        Rectangle PillRect(Graphics g, string text, Point at, Font f)
         {
             SizeF s = g.MeasureString(text, f);
             int px = S(9), py = S(4);
@@ -2674,8 +2791,14 @@ namespace Capturo
             if (r.Right > ClientSize.Width) r.X = ClientSize.Width - r.Width - 2;
             if (r.Bottom > ClientSize.Height) r.Y = ClientSize.Height - r.Height - 2;
             if (r.X < 0) r.X = 0;
+            return r;
+        }
+
+        Rectangle DrawPill(Graphics g, string text, Point at, Font f, Color bg, Color fg)
+        {
+            var r = PillRect(g, text, at, f);
             Art.FillRound(g, bg, r, S(6));
-            using (var b = new SolidBrush(fg)) g.DrawString(text, f, b, r.X + px, r.Y + py);
+            using (var b = new SolidBrush(fg)) g.DrawString(text, f, b, r.X + S(9), r.Y + S(4));
             return r;
         }
 
@@ -3622,12 +3745,33 @@ namespace Capturo
             if (VideoRecorder.Current != null) { VideoRecorder.Current.Stop(false); return; }
             if (ScrollCapture.Current != null) { ScrollCapture.Current.Stop(); return; }
             if (overlay != null && !overlay.IsDisposed) return;
-            Rectangle vs;
-            Bitmap shot;
-            try { shot = Services.CaptureVirtualScreen(out vs); }
-            catch (Exception ex) { Notify("Erro na captura", ex.Message, null); return; }
+            // a tela é lida numa thread enquanto a janela da captura (ainda invisível) é criada
+            Rectangle vs = SystemInformation.VirtualScreen;
+            Bitmap shot = null; Exception grabError = null;
+            var grab = new Thread(() =>
+            {
+                try { Rectangle v; shot = Services.CaptureVirtualScreen(out v); }
+                catch (Exception ex) { grabError = ex; }
+            }) { IsBackground = true, Name = "capturar-tela" };
+            grab.Start();
             Log("captura " + vs + (pinMode ? " (fixar)" : ""));
-            overlay = new OverlayForm(this, shot, vs, pinMode);
+            try
+            {
+                overlay = new OverlayForm(this, () =>
+                {
+                    grab.Join();
+                    if (grabError != null) throw grabError;
+                    return shot;
+                }, vs, pinMode, false);
+            }
+            catch (Exception ex)
+            {
+                overlay = null;
+                grab.Join();
+                if (shot != null) shot.Dispose();
+                Notify("Erro na captura", (grabError ?? ex).Message, null);
+                return;
+            }
             overlay.GifMode = gif;
             overlay.VideoMode = video;
             overlay.ScrollMode = scroll;

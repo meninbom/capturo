@@ -52,9 +52,12 @@ namespace Capturo
             ep.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 84L);
             try
             {
+                // a redução sai direto do buffer do decodificador, em paralelo (o DrawImage com
+                // HighQualityBilinear do GDI+ levava ~33 ms por quadro 1080p e era 72% do tempo da prévia)
+                var shrink = new AreaScaler(srcW, srcH, Width, Height);
                 using (var r = new Mp4Reader(path, true, false))
-                using (var full = new Bitmap(srcW, srcH, PixelFormat.Format32bppRgb))
-                using (var small = new Bitmap(Width, Height, PixelFormat.Format24bppRgb))
+                using (var small = new Bitmap(Width, Height, PixelFormat.Format32bppRgb))
+                using (var ms = new MemoryStream())
                 {
                     int next = 0;
                     while (!stop)
@@ -64,21 +67,12 @@ namespace Capturo
                         {
                             time = t;
                             if (t / 10000 + 2 < next) return;
-                            var d = full.LockBits(new Rectangle(0, 0, srcW, srcH), ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
-                            int rows = Math.Min(srcH, r.Height), bytes = Math.Min(srcW, r.Width) * 4;
-                            for (int y = 0; y < rows; y++) MF.Copy(d.Scan0 + y * d.Stride, p + y * pitch, (IntPtr)bytes);
-                            full.UnlockBits(d);
-                            using (var g = Graphics.FromImage(small))
-                            {
-                                g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-                                g.PixelOffsetMode = PixelOffsetMode.Half;
-                                g.DrawImage(full, new Rectangle(0, 0, Width, Height));
-                            }
-                            using (var ms = new MemoryStream())
-                            {
-                                small.Save(ms, jpg, ep);
-                                frames.Add((int)(t / 10000), ms.ToArray());
-                            }
+                            var d = small.LockBits(new Rectangle(0, 0, Width, Height), ImageLockMode.WriteOnly, PixelFormat.Format32bppRgb);
+                            try { shrink.Run(p, pitch, Math.Min(srcW, r.Width), Math.Min(srcH, r.Height), d.Scan0, d.Stride); }
+                            finally { small.UnlockBits(d); }
+                            ms.SetLength(0);
+                            small.Save(ms, jpg, ep);
+                            frames.Add((int)(t / 10000), ms.GetBuffer(), (int)ms.Length, true);
                             next = (int)(t / 10000) + 1000 / Fps;
                         });
                         if (!ok) break;
@@ -92,19 +86,31 @@ namespace Capturo
 
         int lastIndex = -1;
         Bitmap last;
+        byte[] readBuffer;   // JPEG lido do disco (reaproveitado: evita ~120 KB no heap de objetos grandes por quadro)
 
+        // Número do quadro devolvido pelo último At (-1 se nenhum): muda quando chega um quadro novo.
+        public int ShownIndex { get { return last != null ? lastIndex : -1; } }
+
+        // O bitmap devolvido é reaproveitado no próximo At: use-o antes de pedir outro quadro.
         public Bitmap At(int t)
         {
-            int idx;
-            byte[] data = frames.At(t, lastIndex, false, out idx);
+            int idx, count;
+            byte[] data = frames.Read(t, lastIndex, false, ref readBuffer, out count, out idx);
             if (data == null) return idx == lastIndex ? last : null;
-            using (var stream = new MemoryStream(data, false))
+            using (var stream = new MemoryStream(data, 0, count, false))
             using (var bmp = new Bitmap(stream))
             {
-                var conv = new Bitmap(bmp.Width, bmp.Height, PixelFormat.Format32bppRgb);
-                using (var g = Graphics.FromImage(conv)) g.DrawImageUnscaled(bmp, 0, 0);
-                if (last != null) last.Dispose();
-                last = conv; lastIndex = idx;
+                if (last == null || last.Width != bmp.Width || last.Height != bmp.Height)
+                {
+                    if (last != null) last.Dispose();
+                    last = new Bitmap(bmp.Width, bmp.Height, PixelFormat.Format32bppRgb);
+                }
+                using (var g = Graphics.FromImage(last))
+                {
+                    g.CompositingMode = CompositingMode.SourceCopy;
+                    g.DrawImageUnscaled(bmp, 0, 0);
+                }
+                lastIndex = idx;
                 return last;
             }
         }
@@ -129,7 +135,86 @@ namespace Capturo
         }
     }
 
+    // Redução de imagem por média de área (cada pixel de destino é a média ponderada dos pixels de
+    // origem que ele cobre), separável e em paralelo. Lê BGRX de 32 bits e escreve 32 bpp.
+    sealed class AreaScaler
+    {
+        readonly int sw, sh, dw, dh, tx, ty;
+        readonly int[] xi, xw, xn, yi, yw, yn;   // por pixel de destino: índices, pesos (x256) e quantidade
+        int[] cxi, cyi; int cw = -1, ch = -1;    // índices limitados ao quadro decodificado
+
+        public AreaScaler(int sw, int sh, int dw, int dh)
+        {
+            this.sw = sw; this.sh = sh; this.dw = dw; this.dh = dh;
+            Taps(sw, dw, out xi, out xw, out xn, out tx);
+            Taps(sh, dh, out yi, out yw, out yn, out ty);
+        }
+
+        static void Taps(int s, int d, out int[] idx, out int[] w, out int[] n, out int taps)
+        {
+            double k = s / (double)d;
+            taps = (int)Math.Ceiling(k) + 1;
+            idx = new int[d * taps]; w = new int[d * taps]; n = new int[d];
+            for (int i = 0; i < d; i++)
+            {
+                double a = i * k, b = Math.Min(s, (i + 1) * k);
+                int i0 = Math.Min(s - 1, (int)Math.Floor(a)), i1 = Math.Max(i0, Math.Min(s - 1, (int)Math.Ceiling(b) - 1));
+                int cnt = Math.Min(taps, i1 - i0 + 1), sum = 0, big = 0;
+                for (int j = 0; j < cnt; j++)
+                {
+                    double cover = Math.Max(0, Math.Min(b, i0 + j + 1) - Math.Max(a, i0 + j));
+                    int v = (int)Math.Round(cover / Math.Max(1e-9, b - a) * 256);
+                    idx[i * taps + j] = i0 + j; w[i * taps + j] = v; sum += v;
+                    if (v > w[i * taps + big]) big = j;
+                }
+                w[i * taps + big] += 256 - sum;   // os pesos somam exatamente 256
+                n[i] = cnt;
+            }
+        }
+
+        static int[] Clamp(int[] idx, int max)
+        {
+            var c = new int[idx.Length];
+            for (int i = 0; i < c.Length; i++) c[i] = Math.Min(max, idx[i]);
+            return c;
+        }
+
+        // availW/availH: tamanho real do quadro decodificado (o que faltar repete a última linha/coluna).
+        public unsafe void Run(IntPtr src, int pitch, int availW, int availH, IntPtr dst, int dstStride)
+        {
+            if (availW != cw) { cxi = availW >= sw ? xi : Clamp(xi, availW - 1); cw = availW; }
+            if (availH != ch) { cyi = availH >= sh ? yi : Clamp(yi, availH - 1); ch = availH; }
+            int[] XI = cxi, XW = xw, XN = xn, YI = cyi, YW = yw, YN = yn;
+            int TX = tx, TY = ty, DW = dw;
+            System.Threading.Tasks.Parallel.For(0, dh, () => new int[DW * 3], (y, state, acc) =>
+            {
+                Array.Clear(acc, 0, acc.Length);
+                for (int j = 0; j < YN[y]; j++)
+                {
+                    uint* row = (uint*)((byte*)src + (long)YI[y * TY + j] * pitch);
+                    int wy = YW[y * TY + j];
+                    for (int x = 0, a = 0; x < DW; x++, a += 3)
+                    {
+                        int r = 0, g = 0, b = 0, o = x * TX;
+                        for (int q = 0; q < XN[x]; q++)
+                        {
+                            uint c = row[XI[o + q]]; int wx = XW[o + q];
+                            r += (int)((c >> 16) & 255) * wx; g += (int)((c >> 8) & 255) * wx; b += (int)(c & 255) * wx;
+                        }
+                        acc[a] += r * wy; acc[a + 1] += g * wy; acc[a + 2] += b * wy;
+                    }
+                }
+                uint* o2 = (uint*)((byte*)dst + (long)y * dstStride);
+                for (int x = 0, a = 0; x < DW; x++, a += 3)
+                    o2[x] = 0xFF000000u | (uint)(((acc[a] + 32768) >> 16) << 16) | (uint)(((acc[a + 1] + 32768) >> 16) << 8) | (uint)((acc[a + 2] + 32768) >> 16);
+                return acc;
+            }, acc => { });
+        }
+    }
+
     // Som da prévia: toca o áudio misturado a partir da posição atual (waveOut, já vem no Windows).
+    // Som da prévia: a mistura é lida do disco enquanto toca (4 buffers de 100 ms no waveOut),
+    // então o Play não espera o áudio inteiro ficar pronto, nem numa gravação longa.
     sealed class AudioPreview : IDisposable
     {
         [StructLayout(LayoutKind.Sequential)] struct WAVEFORMATEX { public short wFormatTag, nChannels; public int nSamplesPerSec, nAvgBytesPerSec; public short nBlockAlign, wBitsPerSample, cbSize; }
@@ -141,55 +226,111 @@ namespace Capturo
         [DllImport("winmm.dll")] static extern int waveOutReset(IntPtr h);
         [DllImport("winmm.dll")] static extern int waveOutClose(IntPtr h);
 
-        volatile float[] sys, mic;
-        IntPtr h, hdr, data;
+        const int Bufs = 4, Frames = 4800;   // 100 ms cada
+        const int WHDR_DONE = 1, CALLBACK_EVENT = 0x50000;
+        static readonly int HdrSize = Marshal.SizeOf(typeof(WAVEHDR));
+        static readonly int FlagsAt = Marshal.OffsetOf(typeof(WAVEHDR), "dwFlags").ToInt32();
 
-        public AudioPreview(VideoProject p)
-        {
-            string dir = p.Dir;
-            bool hs = p.HasSys, hm = p.HasMic;
-            if (!hs && !hm) return;
-            new Thread(() =>
-            {
-                try
-                {
-                    if (hs) sys = RawAudio.LoadStereo(Path.Combine(dir, "sys.raw"), 48000);
-                    if (hm) mic = RawAudio.LoadStereo(Path.Combine(dir, "mic.raw"), 48000);
-                }
-                catch { }
-            }) { IsBackground = true, Name = "audio-previa" }.Start();
-        }
+        MixStream stream;
+        IntPtr h;
+        readonly IntPtr[] hdrs = new IntPtr[Bufs], datas = new IntPtr[Bufs];
+        readonly bool[] queued = new bool[Bufs];
+        readonly float[] mix = new float[Frames * 2];
+        readonly short[] pcm = new short[Frames * 2];
+        AutoResetEvent wake;
+        Thread feeder;
+        volatile bool stop;
+        bool ended;
+
+        public AudioPreview(VideoProject p) { }
 
         // Toca o som do vídeo final a partir do instante fromMs da gravação (com as velocidades).
         public void Play(VideoProject p, int fromMs)
         {
             Stop();
-            float[] a = p.UseSys ? sys : null, b = p.UseMic ? mic : null;
-            if (a == null && b == null) return;
-            float[] mix;
-            try { mix = p.MixAudio(fromMs, a, b); } catch { return; }
-            if (mix == null || mix.Length < 960) return;
-            var pcm = new short[mix.Length];
-            for (int i = 0; i < mix.Length; i++) pcm[i] = (short)Math.Max(-32767, Math.Min(32767, mix[i] * 32767));
+            MixStream s;
+            try { s = p.OpenMix(fromMs); } catch { return; }
+            if (s == null) return;
+            if (s.Length < 480) { s.Dispose(); return; }
+            stream = s;
+            wake = new AutoResetEvent(false);
             var fmt = new WAVEFORMATEX { wFormatTag = 1, nChannels = 2, nSamplesPerSec = 48000, nAvgBytesPerSec = 48000 * 4, nBlockAlign = 4, wBitsPerSample = 16 };
-            if (waveOutOpen(out h, -1, ref fmt, IntPtr.Zero, IntPtr.Zero, 0) != 0) { h = IntPtr.Zero; return; }
-            data = Marshal.AllocHGlobal(pcm.Length * 2);
-            Marshal.Copy(pcm, 0, data, pcm.Length);
-            int hs = Marshal.SizeOf(typeof(WAVEHDR));
-            hdr = Marshal.AllocHGlobal(hs);
-            Marshal.StructureToPtr(new WAVEHDR { lpData = data, dwBufferLength = pcm.Length * 2 }, hdr, false);
-            waveOutPrepareHeader(h, hdr, hs);
-            waveOutWrite(h, hdr, hs);
+            if (waveOutOpen(out h, -1, ref fmt, wake.SafeWaitHandle.DangerousGetHandle(), IntPtr.Zero, CALLBACK_EVENT) != 0)
+            {
+                h = IntPtr.Zero; stream.Dispose(); stream = null; wake.Dispose(); wake = null;
+                return;
+            }
+            ended = false;
+            for (int i = 0; i < Bufs; i++)
+            {
+                datas[i] = Marshal.AllocHGlobal(Frames * 4);
+                hdrs[i] = Marshal.AllocHGlobal(HdrSize);
+                Marshal.StructureToPtr(new WAVEHDR { lpData = datas[i], dwBufferLength = Frames * 4 }, hdrs[i], false);
+                waveOutPrepareHeader(h, hdrs[i], HdrSize);
+                queued[i] = !ended && Fill(i);
+            }
+            // os primeiros 400 ms já estão na fila; o resto é lido enquanto toca
+            stop = false;
+            feeder = new Thread(Feed) { IsBackground = true, Name = "audio-previa" };
+            feeder.Start();
+        }
+
+        // Próximo pedaço no buffer i (o último é completado com silêncio). false quando o som acabou.
+        bool Fill(int i)
+        {
+            int k;
+            try { k = stream.Read(mix, Frames); }
+            catch { k = 0; }
+            if (k <= 0) { ended = true; return false; }
+            for (int j = 0; j < k * 2; j++) pcm[j] = (short)Math.Max(-32767, Math.Min(32767, mix[j] * 32767));
+            if (k < Frames) Array.Clear(pcm, k * 2, (Frames - k) * 2);
+            Marshal.Copy(pcm, 0, datas[i], Frames * 2);
+            Marshal.WriteInt32(hdrs[i], FlagsAt, Marshal.ReadInt32(hdrs[i], FlagsAt) & ~WHDR_DONE);
+            waveOutWrite(h, hdrs[i], HdrSize);
+            return true;
+        }
+
+        void Feed()
+        {
+            try
+            {
+                while (!stop)
+                {
+                    wake.WaitOne(200);
+                    if (stop) break;
+                    bool any = false;
+                    for (int i = 0; i < Bufs; i++)
+                    {
+                        if (queued[i] && (Marshal.ReadInt32(hdrs[i], FlagsAt) & WHDR_DONE) != 0) queued[i] = false;
+                        if (!queued[i] && !ended) queued[i] = Fill(i);
+                        any |= queued[i];
+                    }
+                    if (ended && !any) break;   // tocou até o fim
+                }
+            }
+            finally
+            {
+                waveOutReset(h);
+                for (int i = 0; i < Bufs; i++)
+                {
+                    waveOutUnprepareHeader(h, hdrs[i], HdrSize);
+                    Marshal.FreeHGlobal(hdrs[i]); Marshal.FreeHGlobal(datas[i]);
+                    hdrs[i] = datas[i] = IntPtr.Zero; queued[i] = false;
+                }
+                waveOutClose(h);
+                h = IntPtr.Zero;
+                stream.Dispose();
+            }
         }
 
         public void Stop()
         {
-            if (h == IntPtr.Zero) return;
-            waveOutReset(h);
-            waveOutUnprepareHeader(h, hdr, Marshal.SizeOf(typeof(WAVEHDR)));
-            waveOutClose(h);
-            Marshal.FreeHGlobal(hdr); Marshal.FreeHGlobal(data);
-            h = hdr = data = IntPtr.Zero;
+            if (feeder == null) return;
+            stop = true;
+            wake.Set();
+            feeder.Join();
+            feeder = null; stream = null;
+            wake.Dispose(); wake = null;
         }
 
         public void Dispose() { Stop(); }
@@ -218,7 +359,7 @@ namespace Capturo
         Thread exportThread;
         volatile bool exportCancel;
         Bitmap frameBmp;
-        int frameAt = -1;
+        int frameAt = -1, frameSrc = -1;
         string lastSaved;
         public bool Quiet;                     // fechando junto com o app: guarda a gravação sem perguntar
         ZoomRegion selected;
@@ -246,6 +387,13 @@ namespace Capturo
             p = VideoProject.Load(dir);
             cache = new PreviewCache(p.RawVideo, p.W, p.H, p.Duration);
             sound = new AudioPreview(p);
+            // efeitos da câmera numa thread: parado, o quadro é refeito quando o resultado novo chega
+            p.CamFxAsync = true;
+            p.CamFxReady = () =>
+            {
+                try { BeginInvoke((Action)(() => { if (!playing && !IsDisposed) { frameAt = -1; preview.Invalidate(); } })); }
+                catch (InvalidOperationException) { }   // janela fechando
+            };
 
             Text = "Editor de vídeo · Capturo";
             Icon = Art.AppIcon();
@@ -858,8 +1006,20 @@ namespace Capturo
                 preview.Invalidate(); timeline.Invalidate();
                 timeLabel.Text = Fmt((int)Math.Min(u, p.OutDuration)) + " / " + Fmt((int)p.OutDuration);
             }
-            if (!cache.Done) { timeline.Invalidate(); if (frameAt == -1 || cacheShown < cache.LoadedMs) preview.Invalidate(); }
+            if (!cache.Done)
+            {
+                timeline.Invalidate();
+                // redesenha quando o quadro da posição atual acaba de chegar (antes de chegar, fica o aviso)
+                if (frameAt == -1 || (position > cacheShown && cache.LoadedMs >= position)) preview.Invalidate();
+            }
+            else if (!cacheFinished)
+            {
+                cacheFinished = true;   // última atualização: tira o aviso e a faixa de carregamento
+                timeline.Invalidate(); preview.Invalidate();
+            }
         }
+
+        bool cacheFinished;
 
         // ======================================================== prévia
         Rectangle previewRect;          // onde a tela de saída aparece no painel
@@ -883,8 +1043,11 @@ namespace Capturo
             }
             bool focus = FocusMode;
             int key = position * 2 + (focus ? 1 : 0);
-            if (frameBmp == null || frameBmp.Width != w || frameBmp.Height != h || frameAt != key)
+            int srcIndex = cache.ShownIndex;   // o quadro da prévia pode chegar depois, na mesma posição
+            cacheShown = cache.LoadedMs;
+            if (frameBmp == null || frameBmp.Width != w || frameBmp.Height != h || frameAt != key || frameSrc != srcIndex)
             {
+                frameSrc = srcIndex;
                 if (frameBmp == null || frameBmp.Width != w || frameBmp.Height != h)
                 {
                     if (frameBmp != null) frameBmp.Dispose();
@@ -898,7 +1061,6 @@ namespace Capturo
                     finally { p.NoCamera = false; }
                 }
                 frameAt = key;
-                cacheShown = cache.LoadedMs;
             }
             g.DrawImageUnscaled(frameBmp, dst.X, dst.Y);
             if (focus) DrawFocusBox(g);

@@ -73,30 +73,14 @@ namespace Capturo
         // Espera a página parar de se mexer (rolagem suave, imagens carregando).
         // before: a imagem de antes de rolar; primeiro espera ela mudar (a rolagem do navegador
         // é animada e pode demorar a começar), depois espera parar.
-        int[] GrabStable(Sig before)
+        int[] GrabStable()
         {
-            int w = area.Width, h = area.Height;
-            Thread.Sleep(60);
-            var a = Grab();
-            var ha = Stitcher.Hash(a, w, h);
-            for (int waited = 0; before != null && Stitcher.Same(ha, before) && waited < 1200 && !stop; waited += 60)
-            {
-                Thread.Sleep(60);
-                a = Grab(); ha = Stitcher.Hash(a, w, h);
-            }
-            for (int i = 0; i < 20 && !stop; i++)
-            {
-                Thread.Sleep(70);
-                var b = Grab();
-                var hb = Stitcher.Hash(b, w, h);
-                if (Stitcher.Same(ha, hb)) break;
-                a = b; ha = hb;
-            }
-            lastSig = ha;
-            return a;
+            var px = Stitcher.GrabStable(Grab, area.Width, area.Height, lastPx, () => stop);
+            lastPx = px;
+            return px;
         }
 
-        Sig lastSig;
+        int[] lastPx;   // a última imagem parada (antes de rolar de novo)
 
         void Run()
         {
@@ -108,7 +92,7 @@ namespace Capturo
             {
                 Thread.Sleep(200);   // a sobreposição da captura acabou de fechar
                 SetCursorPos(center.X, center.Y);
-                st = new Stitcher(area.Width, area.Height, GrabStable(null));
+                st = new Stitcher(area.Width, area.Height, GrabStable());
                 TrayApp.Log("rolagem: área " + area);
                 int maxRows = Math.Max(area.Height, MaxPixels / area.Width);
                 while (!stop)
@@ -126,7 +110,7 @@ namespace Capturo
                     if (st.Rows.Count >= maxRows) { why = "Parei no limite de tamanho da imagem."; break; }
 
                     mouse_event(MOUSEEVENTF_WHEEL, 0, 0, -120 * st.Notches, IntPtr.Zero);
-                    var cur = GrabStable(lastSig);
+                    var cur = GrabStable();
                     if (stop) break;
                     int d = st.Add(cur);
                     TrayApp.Log("rolagem: parte " + (st.Parts + (d > 0 ? 0 : 1)) + ": " + st.LastInfo);
@@ -231,9 +215,67 @@ namespace Capturo
             return true;
         }
 
+        // Linhas com desenho de n que batem com as de p deslocadas d linhas para cima (n[i] == p[i + d]).
+        static int Matches(Sig p, Sig n, int d)
+        {
+            int c = 0, h = p.Rows.Length;
+            for (int i = 0; i + d < h; i++) if (n.Rows[i] == p.Rows[i + d] && !n.Flat[i]) c++;
+            return c;
+        }
+
+        // b não rolou em relação a a: nas colunas que mudaram, nenhum deslocamento bate melhor que a
+        // mesma posição. Uma animação na página (banner, vídeo, imagem aparecendo) muda algumas linhas sem
+        // parar; isto não impede de ver que a rolagem acabou, como a exigência de imagens idênticas impedia.
+        // (Menus e painéis fixos ficam fora das colunas comparadas, senão escondem o deslocamento.)
+        public static bool Settled(int[] a, int[] b, int w, int h)
+        {
+            int x0, x1;
+            Moving(a, b, w, h, out x0, out x1);
+            if (x1 - x0 < 8) return true;   // só mudanças miúdas (cursor piscando)
+            Sig sa = Hash(a, w, h, x0, x1), sb = Hash(b, w, h, x0, x1);
+            int s0 = Matches(sa, sb, 0), best = 0;
+            for (int d = 1; d < h * 3 / 4; d++) best = Math.Max(best, Matches(sa, sb, d));
+            if (s0 < 8 && best < 8) return false;   // quase tudo liso: não dá para afirmar
+            return best <= s0;
+        }
+
+        // Espera a página parar de se mexer (rolagem suave, imagens carregando).
+        // before: a imagem de antes de rolar; primeiro espera o conteúdo andar (a rolagem do navegador
+        // é animada e pode demorar a começar), depois espera parar. Parado = igual à anterior ou, com algo
+        // animando na página, sem deslocamento por alguns quadros seguidos.
+        public static int[] GrabStable(Func<int[]> grab, int w, int h, int[] before, Func<bool> stop)
+        {
+            Thread.Sleep(60);
+            var a = grab();
+            var ha = Hash(a, w, h);
+            Sig hb0 = before != null ? Hash(before, w, h) : null;
+            for (int waited = 0; before != null && (Same(ha, hb0) || Settled(before, a, w, h)) && waited < 1200 && !stop(); waited += 60)
+            {
+                Thread.Sleep(60);
+                a = grab(); ha = Hash(a, w, h);
+            }
+            int still = 0;
+            for (int i = 0; i < 20 && !stop(); i++)
+            {
+                Thread.Sleep(70);
+                var b = grab();
+                var hb = Hash(b, w, h);
+                if (Same(ha, hb)) break;
+                bool settled = Settled(a, b, w, h);
+                a = b; ha = hb;
+                if (settled && ++still >= 3) break;   // ~0,2 s sem rolar: o resto é animação
+                if (!settled) still = 0;
+            }
+            return a;
+        }
+
         // Colunas que mudaram de verdade entre duas imagens (uma parte boa das linhas mudou):
         // um cursor piscando ou um destaque num menu fixo não contam.
-        public static void Moving(int[] a, int[] b, int w, int h, out int x0, out int x1)
+        public static void Moving(int[] a, int[] b, int w, int h, out int x0, out int x1) { Moving(a, b, w, h, 0, out x0, out x1); }
+
+        // minFrac > 0: só conta a coluna que mudou em pelo menos essa fração das linhas da que mais mudou
+        // (um cabeçalho que muda de cor ao rolar faz até um menu lateral fixo parecer "mexer").
+        public static void Moving(int[] a, int[] b, int w, int h, double minFrac, out int x0, out int x1)
         {
             var cnt = new int[w];
             System.Threading.Tasks.Parallel.For(0, h, () => new int[w], (y, s, local) =>
@@ -243,6 +285,7 @@ namespace Capturo
                 return local;
             }, local => { lock (cnt) for (int x = 0; x < w; x++) cnt[x] += local[x]; });
             int need = Math.Max(3, h / 25);
+            if (minFrac > 0) { int max = 0; foreach (int c in cnt) max = Math.Max(max, c); need = Math.Max(need, (int)(max * minFrac)); }
             x0 = 0; while (x0 < w && cnt[x0] < need) x0++;
             x1 = w; while (x1 > x0 && cnt[x1 - 1] < need) x1--;
         }
@@ -285,6 +328,32 @@ namespace Capturo
             }
             // só linhas lisas batendo (um trecho em branco): sem pista do quanto andou, usa o esperado
             if (bestD > 0 && bestInfo < 6 && expected <= 0) return -1;
+            if (bestD > 0) return bestD;
+            return Loose(p, n, nFlat, top, L, expected);
+        }
+
+        // Sem encaixe com no máximo 1/4 das linhas diferentes (algo na página mudou sozinho: banner
+        // animado, cabeçalho que encolhe, imagem aparecendo, botão "voltar ao topo"): aceita o
+        // deslocamento com mais linhas de conteúdo batendo, se ele se destaca com folga dos outros.
+        static int Loose(ulong[] p, ulong[] n, bool[] nFlat, int top, int L, int expected)
+        {
+            int bestD = -1, best = 0, second = 0;
+            var score = new int[L];
+            for (int d = 1; d < L; d++)
+            {
+                int overlap = L - d;
+                if (overlap < Math.Min(24, L / 4)) break;
+                int info = 0;
+                for (int i = 0; i < overlap; i++) if (!nFlat[top + i] && n[top + i] == p[top + i + d]) info++;
+                score[d] = info;
+                if (info > best || (info == best && expected > 0 && Math.Abs(d - expected) < Math.Abs(bestD - expected))) { bestD = d; best = info; }
+            }
+            for (int d = 1; d < L; d++) if (Math.Abs(d - bestD) > 3 && score[d] > second) second = score[d];
+            // nada andou (só a animação mudou): é o fim da página
+            int still = 0;
+            for (int i = 0; i < L; i++) if (!nFlat[top + i] && n[top + i] == p[top + i]) still++;
+            if (still >= 8 && still >= best) return 0;
+            if (bestD <= 0 || best < Math.Max(20, (L - bestD) / 10) || best < second * 2) return -1;
             return bestD;
         }
 
@@ -300,6 +369,20 @@ namespace Capturo
             var ps = Hash(last, W, H, x0, x1);
             var ns = Hash(cur, W, H, x0, x1);
             int d = Offset(ps, ns, expected, out top, out bot);
+            if (d < 0)
+            {
+                // de novo só com as colunas que mudaram muito (o conteúdo que rola), sem as que mudaram só
+                // numa faixa (menu fixo sob um cabeçalho que mudou)
+                int rx0, rx1;
+                Moving(last, cur, W, H, 0.2, out rx0, out rx1);
+                if (CropX0 >= 0) { rx0 = Math.Min(rx0, CropX0); rx1 = Math.Max(rx1, CropX1); }
+                if (rx1 - rx0 >= 8 && (rx0 != x0 || rx1 != x1))
+                {
+                    int t2, b2;
+                    int d2 = Offset(Hash(last, W, H, rx0, rx1), Hash(cur, W, H, rx0, rx1), expected, out t2, out b2);
+                    if (d2 >= 0) { d = d2; x0 = rx0; x1 = rx1; top = t2; bot = b2; }
+                }
+            }
             LastInfo = "colunas " + x0 + "-" + x1 + ", topo " + top + ", rodapé " + bot + ", andou " + d + ", cliques " + Notches;
             if (d <= 0) return d;
             CropX0 = x0; CropX1 = x1;

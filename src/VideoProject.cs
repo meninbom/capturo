@@ -513,7 +513,34 @@ namespace Capturo
         public void SortZooms() { Zooms.Sort((a, b) => a.Start.CompareTo(b.Start)); Invalidate(); }
 
         // Qualquer mudança de zoom, estilo da câmera ou cursor refaz as trilhas (é rápido).
-        public void Invalidate() { track = null; cursorTrack = null; timeMap = null; }
+        // Chamado a cada edição (até a cada passo de um slider). As trilhas só são refeitas quando algo
+        // de que elas dependem mudou: numa gravação de 10 min, refazê-las custava ~35 ms por evento,
+        // mesmo ao mexer só na margem ou no fundo.
+        public void Invalidate()
+        {
+            timeMap = null;
+            if (cursorTrack != null && cursorKey != CursorKey()) cursorTrack = null;
+            if (track != null && trackKey != TrackKey()) track = null;
+        }
+
+        string cursorKey, trackKey;
+
+        // tudo o que BuildCursorTrack lê além da gravação (que não muda)
+        string CursorKey() { return Style.Smoothing.ToString("R", CultureInfo.InvariantCulture) + "|" + Style.Sway.ToString("R", CultureInfo.InvariantCulture); }
+
+        // tudo o que BuildTrack lê: os zooms, o estilo da câmera e, seguindo o cursor, a trilha dele
+        string TrackKey()
+        {
+            var ci = CultureInfo.InvariantCulture;
+            var sb = new StringBuilder();
+            sb.Append(Style.Zoom).Append('|').Append(Style.Connect).Append('|').Append(Style.Follow).Append('|')
+              .Append(Style.ZoomTime.ToString("R", ci)).Append('|');
+            if (Style.Follow) sb.Append(CursorKey());
+            foreach (var z in Zooms)
+                sb.Append(';').Append(z.Start).Append(',').Append(z.End).Append(',').Append(z.Depth.ToString("R", ci))
+                  .Append(',').Append(z.X.ToString("R", ci)).Append(',').Append(z.Y.ToString("R", ci)).Append(',').Append(z.Manual);
+            return sb.ToString();
+        }
 
         // ---- mouse
         public PointF MouseAt(double t, out int shape)
@@ -539,6 +566,7 @@ namespace Capturo
 
         void BuildCursorTrack()
         {
+            cursorKey = CursorKey();
             int n = (int)(Duration / CStep) + 2;
             var tr = new float[n * 4];
             var rx = new float[n]; var ry = new float[n];
@@ -659,6 +687,7 @@ namespace Capturo
 
         void BuildTrack()
         {
+            trackKey = TrackKey();
             int n = (int)(Duration / TStep) + 3;
             var tr = new float[n * 3];
             var regs = Style.Zoom ? Zooms.Where(z => z.End > z.Start).OrderBy(z => z.Start).ToList() : new List<ZoomRegion>();
@@ -836,9 +865,10 @@ namespace Capturo
         }
 
         // ---- caches de desenho
-        Bitmap bgCache; string bgKey; Size bgSize;
-        Bitmap[] corners; Rectangle[] cornerRects;
-        Bitmap bgDev, scaled;
+        Bitmap bgCache; string bgKey;             // fundo já no tamanho do destino
+        Bitmap[] corners; Rectangle[] cornerRects; // cantos recortados, em pixels do destino
+        bool cornersOn;
+        Bitmap scaled;
         Scaler scaler = new Scaler();
         // exportação: zoom ampliado com bicúbico (mais nítido; a prévia fica no bilinear, mais leve)
         public bool SharpZoom { get { return scaler.Sharp; } set { scaler.Sharp = value; } }
@@ -849,26 +879,40 @@ namespace Capturo
             return Style.Background + "|" + Style.BgImage + "|" + Style.BgBlur + "|" + Style.Padding + "|" + Style.Radius + "|" + Style.Shadow + "|" + Style.Aspect + "|" + s;
         }
 
-        // Fundo + sombra da janela (muda só quando o estilo muda) e os cantos recortados em curva.
-        Bitmap BackgroundLayer(Size outSize)
+        // Fundo + sombra da janela e os cantos recortados em curva, montados direto no tamanho do
+        // destino (scale = destino / OutputSize). Antes eram feitos na resolução de saída e reduzidos
+        // depois: na prévia, cada movimento de um slider do fundo custava ~450 ms.
+        // Refeito só quando o estilo ou o tamanho mudam.
+        Bitmap DeviceBackground(Size outSize, float scale)
         {
-            string key = BgKey(outSize);
+            var dev = new Size(Math.Max(1, (int)Math.Round(outSize.Width * scale)), Math.Max(1, (int)Math.Round(outSize.Height * scale)));
+            string key = BgKey(outSize) + "|" + dev;
             if (bgCache != null && bgKey == key) return bgCache;
             if (bgCache != null) bgCache.Dispose();
             if (corners != null) foreach (var c in corners) c.Dispose();
-            if (bgDev != null) { bgDev.Dispose(); bgDev = null; }
-            bgKey = key; bgSize = outSize;
-            bgCache = new Bitmap(outSize.Width, outSize.Height, PixelFormat.Format32bppRgb);
+            bgKey = key;
+            bgCache = new Bitmap(dev.Width, dev.Height, PixelFormat.Format32bppRgb);
+            float kx = dev.Width / (float)outSize.Width, ky = dev.Height / (float)outSize.Height;
             var r = ContentRect(outSize);
             float rad = Radius;
             using (var g = Graphics.FromImage(bgCache))
             {
                 g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.ScaleTransform(kx, ky);
                 DrawBackdrop(g, outSize);
                 // sombra em três camadas (larga e suave, média e curta), como no Recordly
                 float unit = Math.Max(W, H) / 1600f * Style.Shadow;
                 if (Style.Shadow > 0 && Style.Background != 0)
                 {
+                    // o vídeo cobre o interior do conteúdo: a sombra só precisa ser pintada no anel em volta
+                    // e nos cantos (com 2 px de folga no destino para o arredondamento do retângulo do vídeo)
+                    float m = 2 / Math.Min(kx, ky), cs = ((float)Math.Ceiling(rad * kx) + 3) / kx;
+                    if (r.Width > 2 * cs && r.Height > 2 * cs)
+                        using (var hidden = new Region(new RectangleF(r.X + cs, r.Y + m, r.Width - 2 * cs, r.Height - 2 * m)))
+                        {
+                            hidden.Union(new RectangleF(r.X + m, r.Y + cs, r.Width - 2 * m, r.Height - 2 * cs));
+                            g.ExcludeClip(hidden);
+                        }
                     float[][] layers = { new[] { 12f, 0.55f, 48f }, new[] { 4f, 0.4f, 16f }, new[] { 2f, 0.25f, 8f } };
                     foreach (var L in layers)
                     {
@@ -883,33 +927,48 @@ namespace Capturo
                                 using (var path = Art.RoundRect(sr, rad + e * 0.5f)) g.FillPath(b, path);
                             }
                     }
+                    g.ResetClip();
                 }
             }
-            int cs = (int)Math.Ceiling(rad) + 2;
-            var rr = Rectangle.Round(r);
+            // cantos: o fundo por fora da curva, em pixels do destino. A curva segue o mesmo retângulo
+            // arredondado em que Render/RenderInto desenham o vídeo (senão sobra ~1 px de diferença).
+            var rr = Rectangle.Round(new RectangleF(r.X * scale, r.Y * scale, r.Width * scale, r.Height * scale));
+            RectangleF rd = rr;
+            float radD = rad * scale;
+            int cn = (int)Math.Ceiling(radD) + 2;
             cornerRects = new[] {
-                new Rectangle(rr.X, rr.Y, cs, cs), new Rectangle(rr.Right - cs, rr.Y, cs, cs),
-                new Rectangle(rr.X, rr.Bottom - cs, cs, cs), new Rectangle(rr.Right - cs, rr.Bottom - cs, cs, cs) };
+                new Rectangle(rr.X, rr.Y, cn, cn), new Rectangle(rr.Right - cn, rr.Y, cn, cn),
+                new Rectangle(rr.X, rr.Bottom - cn, cn, cn), new Rectangle(rr.Right - cn, rr.Bottom - cn, cn, cn) };
             corners = new Bitmap[4];
+            cornersOn = radD >= 0.5f;
             for (int i = 0; i < 4; i++)
             {
                 var cr = cornerRects[i];
-                corners[i] = new Bitmap(cs, cs, PixelFormat.Format32bppPArgb);
-                if (rad < 0.5f) continue;
+                corners[i] = new Bitmap(cn, cn, PixelFormat.Format32bppPArgb);
+                if (!cornersOn) continue;
                 using (var g = Graphics.FromImage(corners[i]))
                 using (var tb = new TextureBrush(bgCache, WrapMode.Clamp))
                 using (var path = new GraphicsPath(FillMode.Alternate))
                 {
                     g.SmoothingMode = SmoothingMode.AntiAlias;
+                    g.PixelOffsetMode = PixelOffsetMode.Half;   // pixel i cobre [i, i+1], como o retângulo do vídeo
                     g.TranslateTransform(-cr.X, -cr.Y);
                     var big = cr; big.Inflate(4, 4);
                     path.AddRectangle(big);
-                    using (var round = Art.RoundRect(r, rad)) path.AddPath(round, false);
+                    using (var round = Art.RoundRect(rd, radD)) path.AddPath(round, false);
                     g.SetClip(cr);
                     g.FillPath(tb, path);
                 }
             }
             return bgCache;
+        }
+
+        // Cantos arredondados por cima do vídeo, em pixels do destino (Graphics sem transformação).
+        void DrawCorners(Graphics g, int ox, int oy)
+        {
+            if (!HasFrame || !cornersOn || corners == null) return;
+            g.CompositingMode = CompositingMode.SourceOver;
+            for (int i = 0; i < 4; i++) g.DrawImageUnscaled(corners[i], ox + cornerRects[i].X, oy + cornerRects[i].Y);
         }
 
         void DrawBackdrop(Graphics g, Size outSize)
@@ -1053,6 +1112,7 @@ namespace Capturo
                 scaler.Bilinear(frame, src, scaled, blend);
                 g.DrawImageUnscaled(scaled, dev.X, dev.Y);
             }
+            DrawCorners(g, (int)tx, (int)ty);
             g.Restore(saved);
             DrawOverlays(g, t, view, dst, outSize, zoom);
         }
@@ -1094,6 +1154,7 @@ namespace Capturo
             finally { target.UnlockBits(td); }
             using (var g = Graphics.FromImage(target))
             {
+                DrawCorners(g, 0, 0);
                 g.CompositingQuality = CompositingQuality.HighSpeed;
                 g.InterpolationMode = InterpolationMode.Bilinear;
                 g.PixelOffsetMode = PixelOffsetMode.Half;
@@ -1117,33 +1178,10 @@ namespace Capturo
             return blend < 0.03f ? 0 : blend;
         }
 
-        // Fundo já no tamanho da tela de destino (refeito só quando o estilo ou o tamanho mudam).
-        Bitmap DeviceBackground(Size outSize, float ts)
-        {
-            var bg = BackgroundLayer(outSize);
-            var devSize = new Size((int)Math.Round(outSize.Width * ts), (int)Math.Round(outSize.Height * ts));
-            if (devSize == outSize) return bg;
-            if (bgDev == null || bgDev.Size != devSize)
-            {
-                if (bgDev != null) bgDev.Dispose();
-                bgDev = new Bitmap(devSize.Width, devSize.Height, PixelFormat.Format32bppRgb);
-                using (var gb = Graphics.FromImage(bgDev))
-                {
-                    gb.InterpolationMode = InterpolationMode.HighQualityBilinear;
-                    gb.DrawImage(bg, new Rectangle(0, 0, devSize.Width, devSize.Height));
-                }
-            }
-            return bgDev;
-        }
-
-        // Cantos arredondados, destaque dos cliques, cursor e webcam (em coordenadas da tela de saída).
+        // Destaque dos cliques, cursor e webcam (em coordenadas da tela de saída; os cantos já foram).
         void DrawOverlays(Graphics g, double t, RectangleF view, RectangleF dst, Size outSize, float zoom)
         {
             g.CompositingMode = CompositingMode.SourceOver;
-            if (HasFrame && Radius >= 0.5f)
-                for (int i = 0; i < 4; i++)
-                    g.DrawImage(corners[i], cornerRects[i].X, cornerRects[i].Y, cornerRects[i].Width, cornerRects[i].Height);
-
             float k = dst.Width / view.Width;
             Func<float, float, PointF> map = (x, y) => new PointF(dst.X + (x - view.X) * k, dst.Y + (y - view.Y) * k);
             var clip = g.Clip;
@@ -1182,6 +1220,11 @@ namespace Capturo
         public bool CamVisible(double t) { return HasCam && Style.Cam && Cam.Visible(t); }
 
         CamFx camFx;   // efeitos da câmera (desfoque do fundo, filtros...), com cache do último quadro
+        // Prévia do editor: os efeitos rodam numa thread e o quadro usa o último resultado pronto;
+        // CamFxReady avisa (de outra thread) quando chega um novo. A exportação continua síncrona.
+        public bool CamFxAsync;
+        public Action CamFxReady;
+        CamFxWorker camWorker;
 
         void DrawCam(Graphics g, double t, Size outSize, float zoom)
         {
@@ -1197,12 +1240,25 @@ namespace Capturo
             {
                 float ts;
                 using (var tm = g.Transform) ts = Math.Abs(tm.Elements[0]);
-                if (camFx == null) camFx = new CamFx();
                 try
                 {
-                    img = camFx.Process(frame, Cam.LastIndex, Style, (int)Math.Ceiling(r.Width * ts * 1.15f));
-                    s = img.Width; sx = sy = 0;
-                    cutout = Style.CamBg == 3 && Segmenter.Available;
+                    int size = (int)Math.Ceiling(r.Width * ts * 1.15f);
+                    Bitmap fx;
+                    if (CamFxAsync && Style.CamBg != 0 && Segmenter.Available)   // só o filtro é rápido: fica aqui
+                    {
+                        if (camWorker == null) camWorker = new CamFxWorker(() => { var cb = CamFxReady; if (cb != null) cb(); });
+                        fx = camWorker.Get(frame, Cam.LastIndex, Style, size);   // null só se o efeito falhar
+                    }
+                    else
+                    {
+                        if (camFx == null) camFx = new CamFx();
+                        fx = camFx.Process(frame, Cam.LastIndex, Style, size);
+                    }
+                    if (fx != null)
+                    {
+                        img = fx; s = img.Width; sx = sy = 0;
+                        cutout = Style.CamBg == 3 && Segmenter.Available;
+                    }
                 }
                 catch (Exception ex) { TrayApp.Log("efeito da câmera: " + ex.Message); img = frame; }
             }
@@ -1366,10 +1422,10 @@ namespace Capturo
             foreach (var b in shadows.Values) b.Dispose();
             if (bgCache != null) bgCache.Dispose();
             if (corners != null) foreach (var c in corners) c.Dispose();
-            if (bgDev != null) bgDev.Dispose();
             if (scaled != null) scaled.Dispose();
             if (Cam != null) Cam.Dispose();
             if (camFx != null) camFx.Dispose();
+            if (camWorker != null) camWorker.Dispose();
         }
 
         // Cópia independente para exportar em outra thread enquanto o editor continua aberto
@@ -1384,113 +1440,32 @@ namespace Capturo
             c.Style = Style.Clone();
             c.Cam = Cam != null ? Cam.Reopen() : null;
             c.camFx = null;   // a exportação tem o próprio processador (e a própria sessão do modelo)
+            c.camWorker = null; c.CamFxAsync = false; c.CamFxReady = null;   // e processa cada quadro na hora
             c.track = null; c.cursorTrack = null; c.timeMap = null;
-            c.bgCache = null; c.bgKey = null; c.corners = null; c.cornerRects = null;
-            c.bgDev = null; c.scaled = null; c.scaler = new Scaler();
+            c.bgCache = null; c.bgKey = null; c.corners = null; c.cornerRects = null; c.cornersOn = false;
+            c.scaled = null; c.scaler = new Scaler();
             typeof(VideoProject).GetField("shadows", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(c, new Dictionary<int, Bitmap>());
             return c;
         }
 
-        // ---- áudio misturado (48 kHz estéreo) do trecho cortado
-        public float[] MixAudio()
+        // ---- som do vídeo final (48 kHz estéreo), lido do disco aos poucos
+        // A partir de 'from' (ms da gravação) até o fim do corte, com os trechos de velocidade
+        // (o tom da voz é mantido; acima de 4× fica mudo). null se nenhuma trilha estiver ligada.
+        public MixStream OpenMix(int from)
         {
-            float[] a = UseSys && HasSys ? RawAudio.LoadStereo(Path.Combine(Dir, "sys.raw"), 48000) : null;
-            float[] b = UseMic && HasMic ? RawAudio.LoadStereo(Path.Combine(Dir, "mic.raw"), 48000) : null;
-            return MixAudio(TrimStart, a, b);
-        }
-
-        // Áudio do vídeo final a partir de 'from' (ms da gravação) até o fim do corte, com os trechos
-        // de velocidade já aplicados (o tom da voz é mantido; acima de 4× fica mudo).
-        public float[] MixAudio(int from, float[] a, float[] b)
-        {
+            string a = UseSys && HasSys ? Path.Combine(Dir, "sys.raw") : null;
+            string b = UseMic && HasMic ? Path.Combine(Dir, "mic.raw") : null;
             if (a == null && b == null) return null;
             from = Math.Max(TrimStart, Math.Min(TrimEnd, from));
-            var parts = new List<float[]>();
-            long total = 0;
+            var parts = new List<MixStream.Part>();
             foreach (var g in Map)
             {
                 if (g.S1 <= from) continue;
                 long s0 = (long)(Math.Max(g.S0, from) * 48), s1 = (long)(g.S1 * 48);
                 if (s1 <= s0) continue;
-                var raw = new float[(s1 - s0) * 2];
-                if (a != null) for (long i = 0; i < raw.Length; i++) { long j = s0 * 2 + i; if (j < a.Length) raw[i] += a[j]; }
-                if (b != null) for (long i = 0; i < raw.Length; i++) { long j = s0 * 2 + i; if (j < b.Length) raw[i] += b[j]; }
-                float[] part;
-                if (Math.Abs(g.Rate - 1) < 0.001f) part = raw;
-                else if (g.Rate > 4.01f) part = new float[(long)(raw.Length / 2 / g.Rate) * 2];
-                else part = TimeStretch.Run(raw, g.Rate);
-                parts.Add(part); total += part.Length;
+                parts.Add(new MixStream.Part { S0 = s0, S1 = s1, Rate = g.Rate });
             }
-            var mix = new float[total];
-            long o = 0;
-            foreach (var p in parts) { Array.Copy(p, 0, mix, o, p.Length); o += p.Length; }
-            for (long i = 0; i < mix.Length; i++) if (Math.Abs(mix[i]) > 0.0005f) return mix;
-            return null;
-        }
-    }
-
-    // Muda a velocidade do áudio sem mudar o tom (WSOLA: pedaços sobrepostos com janela de Hann,
-    // cada um escolhido onde melhor continua o anterior, para não "picotar" a voz).
-    static class TimeStretch
-    {
-        const int N = 1536, Hop = N / 2, Tol = 360;
-        static float[] window;
-
-        public static float[] Run(float[] stereo, double rate)
-        {
-            int n = stereo.Length / 2;
-            int outN = (int)(n / rate);
-            if (outN <= 0) return new float[0];
-            if (n < N * 2)
-            {
-                // muito curto: reamostra simples
-                var r = new float[outN * 2];
-                for (int i = 0; i < outN; i++) { int j = Math.Min(n - 1, (int)(i * rate)); r[i * 2] = stereo[j * 2]; r[i * 2 + 1] = stereo[j * 2 + 1]; }
-                return r;
-            }
-            if (window == null)
-            {
-                var w = new float[N];
-                for (int i = 0; i < N; i++) w[i] = (float)(0.5 - 0.5 * Math.Cos(2 * Math.PI * i / N));
-                window = w;
-            }
-            // mono reduzido para comparar os trechos rápido
-            var mono = new float[n];
-            for (int i = 0; i < n; i++) mono[i] = stereo[i * 2] + stereo[i * 2 + 1];
-            var y = new float[(outN + N) * 2];
-            int prev = 0;
-            for (int o = 0; o * Hop < outN; o++)
-            {
-                int ideal = (int)(o * (double)Hop * rate);
-                int best = ideal;
-                if (o > 0)
-                {
-                    // o trecho que naturalmente viria depois do anterior
-                    int nat = prev + Hop;
-                    double bestScore = double.MinValue;
-                    int lo = Math.Max(0, ideal - Tol), hi = Math.Min(n - N - 1, ideal + Tol);
-                    if (nat + Hop < n)
-                        for (int c = lo; c <= hi; c += 2)
-                        {
-                            double s = 0;
-                            for (int k = 0; k < Hop; k += 4) s += mono[nat + k] * mono[c + k];
-                            if (s > bestScore) { bestScore = s; best = c; }
-                        }
-                }
-                best = Math.Max(0, Math.Min(n - N, best));
-                int at = o * Hop;
-                for (int k = 0; k < N; k++)
-                {
-                    int dst = (at + k) * 2, src = (best + k) * 2;
-                    if (dst + 1 >= y.Length) break;
-                    float w = window[k];
-                    y[dst] += stereo[src] * w; y[dst + 1] += stereo[src + 1] * w;
-                }
-                prev = best;
-            }
-            var res = new float[outN * 2];
-            Array.Copy(y, res, res.Length);
-            return res;
+            return MixStream.Open(a, b, parts.ToArray());
         }
     }
 

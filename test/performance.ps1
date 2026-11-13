@@ -6,7 +6,7 @@ New-Item -ItemType Directory -Force $out | Out-Null
 $fw = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319"
 $wm = "$env:WINDIR\System32\WinMetadata"
 $refs = @('/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', "/r:$fw\System.Runtime.dll", "/r:$fw\System.Runtime.WindowsRuntime.dll")
-$refs += @('Windows.Foundation','Windows.Media','Windows.Graphics','Windows.Storage','Windows.Globalization' | ForEach-Object { "/r:$wm\$_.winmd" })
+$refs += @('Windows.Foundation','Windows.Media','Windows.Graphics','Windows.Storage','Windows.Globalization','Windows.AI' | ForEach-Object { "/r:$wm\$_.winmd" })
 $test = switch ($Suite) {
     GifPerformance { 'gif-performance.cs' }
     PreviewPerformance { 'preview-performance.cs' }

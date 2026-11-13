@@ -58,50 +58,6 @@ namespace Capturo
         {
             w.Write(0x44554143); w.Write(rate); w.Write(channels);
         }
-
-        // Lê o arquivo inteiro e converte para "rate" Hz estéreo (float). null se não houver áudio.
-        public static float[] LoadStereo(string path, int rate)
-        {
-            if (!File.Exists(path) || new FileInfo(path).Length <= 12) return null;
-            using (var r = new BinaryReader(File.OpenRead(path)))
-            {
-                if (r.ReadInt32() != 0x44554143) return null;
-                int srcRate = r.ReadInt32(), ch = r.ReadInt32();
-                long n = (r.BaseStream.Length - 12) / 4 / ch;
-                if (n <= 0 || ch <= 0 || srcRate <= 0) return null;
-                // para estéreo, lendo em blocos
-                var st = new float[n * 2];
-                var bytes = new byte[4096 * ch * 4];
-                var src = new float[4096 * ch];
-                long done = 0;
-                while (done < n)
-                {
-                    int k = (int)Math.Min(4096, n - done);
-                    int got = r.Read(bytes, 0, k * ch * 4);
-                    if (got < k * ch * 4) break;
-                    Buffer.BlockCopy(bytes, 0, src, 0, got);
-                    for (int i = 0; i < k; i++)
-                    {
-                        float l = src[i * ch], rr = ch > 1 ? src[i * ch + 1] : l;
-                        st[(done + i) * 2] = l; st[(done + i) * 2 + 1] = rr;
-                    }
-                    done += k;
-                }
-                if (srcRate == rate) return st;
-                long m = n * rate / srcRate;
-                var outp = new float[m * 2];
-                double step = (double)srcRate / rate;
-                for (long i = 0; i < m; i++)
-                {
-                    double pos = i * step;
-                    long a = (long)pos; double f = pos - a;
-                    long b = Math.Min(a + 1, n - 1);
-                    outp[i * 2] = (float)(st[a * 2] * (1 - f) + st[b * 2] * f);
-                    outp[i * 2 + 1] = (float)(st[a * 2 + 1] * (1 - f) + st[b * 2 + 1] * f);
-                }
-                return outp;
-            }
-        }
     }
 
     sealed class AudioCapture

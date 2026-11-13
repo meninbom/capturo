@@ -112,6 +112,23 @@ namespace Capturo
             return new Size(Math.Max(2, (int)(o.Width * k)) & ~1, Math.Max(2, (int)(o.Height * k)) & ~1);
         }
 
+        // Som do MP4, lido aos poucos enquanto o vídeo é codificado. Como antes, sem trilha ligada
+        // ou só com silêncio o arquivo sai sem áudio (a verificação para no primeiro som).
+        static MixStream OpenAudio(VideoProject p)
+        {
+            using (var probe = p.OpenMix(p.TrimStart))
+            {
+                if (probe == null) return null;
+                var buf = new float[4800 * 2];
+                bool sound = false;
+                int k;
+                while (!sound && (k = probe.Read(buf, 4800)) > 0)
+                    for (int i = 0; i < k * 2; i++) if (Math.Abs(buf[i]) > 0.0005f) { sound = true; break; }
+                if (!sound) return null;
+            }
+            return p.OpenMix(p.TrimStart);
+        }
+
         public static void Mp4(VideoProject p, string path, Progress progress, Func<bool> cancelled)
         {
             var full = p.OutputSize;
@@ -119,7 +136,7 @@ namespace Capturo
             int fps = p.Style.OutFps >= 60 ? 60 : 30;
             double bpp = p.Style.Quality == 0 ? 0.16 : p.Style.Quality == 1 ? 0.10 : 0.06;
             int bitrate = (int)Math.Max(1.5e6, Math.Min(40e6, size.Width * (double)size.Height * fps * bpp));
-            float[] audio = p.MixAudio();
+            MixStream audio = OpenAudio(p);
             // três etapas em paralelo: decodificar (FrameSource), montar o quadro (thread "montar")
             // e codificar (esta thread, dona do codificador do Media Foundation)
             var ready = new BlockingCollection<Tuple<Bitmap, int>>(2);
@@ -131,6 +148,7 @@ namespace Capturo
             p.SharpZoom = true;
             try
             {
+                long audioLen = audio != null ? audio.Length : 0;
                 for (int i = 0; i < 3; i++) { var b = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppRgb); outs.Add(b); free.Add(b); }
                 using (var src = new FrameSource(p.RawVideo, p.W, p.H, p.TrimStart))
                 {
@@ -172,6 +190,7 @@ namespace Capturo
 
                             long audioDone = 0;
                             var pcm = new short[4800 * 2];
+                            var abuf = new float[4800 * 2];
                             foreach (var item in ready.GetConsumingEnumerable())
                             {
                                 var outBmp = item.Item1; int i = item.Item2;
@@ -182,16 +201,15 @@ namespace Capturo
                                 // áudio acompanha o vídeo, em blocos de 100 ms
                                 if (audio != null)
                                 {
-                                    long want = Math.Min(audio.Length / 2, (long)((i + 1) * 48000L / fps) + 4800);
+                                    long want = Math.Min(audioLen, (long)((i + 1) * 48000L / fps) + 4800);
                                     while (audioDone < want)
                                     {
-                                        int k = (int)Math.Min(4800, audio.Length / 2 - audioDone);
+                                        int k = (int)Math.Min(4800, audioLen - audioDone);
                                         if (k <= 0) break;
+                                        int got = audio.Read(abuf, k);
+                                        if (got < k) Array.Clear(abuf, got * 2, (k - got) * 2);
                                         for (int j = 0; j < k * 2; j++)
-                                        {
-                                            float v = audio[audioDone * 2 + j];
-                                            pcm[j] = (short)Math.Max(-32767, Math.Min(32767, v * 32767));
-                                        }
+                                            pcm[j] = (short)Math.Max(-32767, Math.Min(32767, abuf[j] * 32767));
                                         w.WriteAudio(pcm, k, audioDone * 10000000L / 48000);
                                         audioDone += k;
                                     }
@@ -214,6 +232,7 @@ namespace Capturo
             finally
             {
                 p.SharpZoom = false;
+                if (audio != null) audio.Dispose();
                 foreach (var b in outs) b.Dispose();
                 stop.Dispose();
             }
