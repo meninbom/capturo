@@ -1,0 +1,6 @@
+# Excluir materiais locais e mídia de demonstração dos arquivos gerados por git archive.
+/test export-ignore
+/tests export-ignore
+/video export-ignore
+/videos export-ignore
+/docs/media export-ignore

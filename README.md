@@ -2,7 +2,7 @@
 
 [![Demonstração do Capturo](docs/media/capturo-hero.gif)](docs/media/capturo-demo.mp4)
 
-*[Ver o vídeo completo (40 s, MP4)](docs/media/capturo-demo.mp4)*
+*[Ver o vídeo completo (39 s, MP4)](docs/media/capturo-demo.mp4): do print anotado ao texto copiado da imagem e a uma gravação que sai do editor já com zoom.*
 
 Ferramenta de print para Windows no estilo do Lightshot. Fiz porque queria algo pequeno que fizesse só isso e fizesse bem: selecionar uma área, rabiscar em cima e copiar, salvar ou fixar na tela.
 
@@ -19,7 +19,7 @@ Ferramenta de print para Windows no estilo do Lightshot. Fiz porque queria algo 
 | ![Bandeja](docs/media/05-bandeja.webp) | ![Configurações](docs/media/06-configuracoes.webp) |
 | **Menu da bandeja** com todas as ações. | **Configurações**: atalhos, pasta, formato e tamanho dos ícones. |
 
-*O vídeo e as imagens são uma recriação da interface feita a partir do código, não gravações de tela do app rodando. Fonte, notificações do Windows e o conteúdo capturado são aproximados.*
+*O vídeo não é uma gravação de tela: as telas do Capturo (OCR, painel e barra de gravação, editor de vídeo e o MP4 exportado com zoom) foram geradas pelo próprio código do app, fora da tela (`video/capture/RenderV2.cs`). O chat, a loja e o cursor nas cenas de print e gravação foram desenhados para a história. As imagens abaixo são uma recriação da interface feita a partir do código; fonte, notificações do Windows e o conteúdo capturado são aproximados.*
 
 ## Stack
 

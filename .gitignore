@@ -1,12 +1,9 @@
-dist/
-test/*.png
+# Saídas de compilação e backups locais
+/dist/
 *.bak
-test/artifacts/
-# projeto do vídeo: caches e capturas brutas
-video/.hyperframes/
-video/.waveform-cache/
-video/.thumbnails/
-video/.media/
-video/node_modules/
-video/capture/rec/
-video/capture/*.exe
+
+# Testes, evidências e projetos de vídeo ficam apenas no ambiente local.
+/test/
+/tests/
+/video/
+/videos/
